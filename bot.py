@@ -87,10 +87,6 @@ async def batch_handler(client: Client, message: Message):
     await message.reply_text("⚙️ **Batch feature** inum konja nerathula complete-ah update panniralam da mapla!")
 
 @app.on_message(filters.document | filters.video | filters.audio)
-alias store_file(client: Client, message: Message):
-    pass
-
-@app.on_message(filters.document | filters.video | filters.audio)
 async def store_file(client: Client, message: Message):
     media = message.document or message.video or message.audio
     if media:
