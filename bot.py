@@ -49,7 +49,6 @@ async def schedule_message_deletion(client: Client, chat_id: int, message_ids: l
         except Exception as e:
             pass
 
-# Dynamic Force Subscription Checker fetching from database
 async def check_force_sub(client: Client, user_id: int):
     channels = await db.get_fsub_channels()
     if not channels:
@@ -241,7 +240,7 @@ async def download_callback(client: Client, callback_query: CallbackQuery):
     else:
         await callback_query.answer("❌ File expired or missing!", show_alert=True)
 
-# Admin Commands: Stats, Broadcast & Dynamic Force Sub Management
+# Admin Commands
 @app.on_message(filters.command("stats") & filters.private)
 async def stats_handler(client: Client, message: Message):
     if message.from_user.id != OWNER_ID:
@@ -336,8 +335,8 @@ async def batch_prompt(client: Client, message: Message):
     USER_BATCH_STATE[message.from_user.id] = {"state": "waiting_batch_first"}
     await message.reply_text("Forward The Batch **First Message** From Your Batch Channel (With Forward Tag), or Give Me Batch First Message link from your batch channel")
 
-# Unified media & interactive handler
-@app.on_message(filters.private & (filters.document | filters.video | filters.audio))
+# Unified Media & Interactive Handler (with command exclusion & proper return to prevent duplicates)
+@app.on_message(filters.private & (filters.document | filters.video | filters.audio) & ~filters.command(["addfsub", "remfsub", "fsublist", "genlink", "batch", "settings", "stats", "start", "broadcast"]))
 async def unified_media_handler(client: Client, message: Message):
     user_id = message.from_user.id
     media = message.document or message.video or message.audio
@@ -401,6 +400,8 @@ async def unified_media_handler(client: Client, message: Message):
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔗 SHARE URL", url=f"https://t.me/share/url?url={batch_link}")]])
             )
             return
+            
+        return
 
     if user_id != OWNER_ID:
         return
