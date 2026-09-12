@@ -28,17 +28,6 @@ def decode_id(encoded_string):
     encoded_string += "=" * (-len(encoded_string) % 4)
     return base64.urlsafe_b64decode(encoded_string.encode("ascii")).decode("ascii")
 
-# Bot start aagum pothu Menu Commands-ah set panra event
-@app.on_startup
-async def set_bot_commands(client: Client):
-    commands = [
-        BotCommand("start", "Check i am alive"),
-        BotCommand("genlink", "To store a single message or file"),
-        BotCommand("batch", "To store multiple messages from a channel")
-    ]
-    await client.set_bot_commands(commands)
-    print("🔥 Bot Commands Menu set successfully!")
-
 @app.on_message(filters.command("start"))
 async def start_handler(client: Client, message: Message):
     if len(message.command) > 1:
@@ -117,6 +106,17 @@ async def store_file(client: Client, message: Message):
             f"🔗 **Share Link:**\n`{share_link}`"
         )
 
+async def main():
+    await app.start()
+    commands = [
+        BotCommand("start", "Check i am alive"),
+        BotCommand("genlink", "To store a single message or file"),
+        BotCommand("batch", "To store multiple messages from a channel")
+    ]
+    await app.set_bot_commands(commands)
+    print("🔥 Bot Commands Menu set successfully & Bot is running!")
+    await app.idle()
+
 if __name__ == "__main__":
     print("🤖 Bot is starting cleanly...")
-    app.run()
+    asyncio.get_event_loop().run_until_complete(main())
