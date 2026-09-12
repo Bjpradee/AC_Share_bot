@@ -63,13 +63,11 @@ async def start_handler(client: Client, message: Message):
                 wait_msg = await message.reply_text("⏳ **Please wait... Sending your batch files.**")
                 sent_messages.append(wait_msg.id)
                 
-                # Fetch all files in range safely
                 files_sent_count = 0
                 for file_db_id in range(start_id, end_id + 1):
-                    file_data = await db.get_file(str(file_db_id))
+                    file_data = await db.get_file(file_db_id)
                     if not file_data:
-                        # Try integer search if string fails
-                        file_data = await db.get_file(file_db_id)
+                        file_data = await db.get_file(str(file_db_id))
                         
                     if file_data:
                         files_sent_count += 1
@@ -95,6 +93,12 @@ async def start_handler(client: Client, message: Message):
                         sent_messages.append(warning_msg.id)
             else:
                 file_data = await db.get_file(decoded_payload)
+                if not file_data:
+                    try:
+                        file_data = await db.get_file(int(decoded_payload))
+                    except:
+                        pass
+
                 if file_data:
                     keyboard = InlineKeyboardMarkup(
                         [[InlineKeyboardButton("📥 DOWNLOAD", callback_data=f"dl_{decoded_payload}")]]
@@ -176,6 +180,28 @@ async def download_callback(client: Client, callback_query: CallbackQuery):
     else:
         await callback_query.answer("❌ File expired or missing!", show_alert=True)
 
+# Direct file store handler for any forwarded media or direct file upload
+@app.on_message(filters.private & (filters.document | filters.video | filters.audio))
+async def direct_file_store(client: Client, message: Message):
+    media = message.document or message.video or message.audio
+    if media:
+        file_id = media.file_id
+        file_name = getattr(media, "file_name", "Unknown File")
+        file_size = media.file_size
+        
+        # Use forwarded message id if available to match batch ranges perfectly
+        custom_id = message.forward_from_message_id if message.forward_from_message_id else None
+        
+        inserted_id = await db.save_file(file_id, file_name, file_size, custom_id=custom_id)
+        encoded_payload = encode_id(str(inserted_id))
+        bot_username = (await client.get_me()).username
+        share_link = f"https://t.me/{bot_username}?start={encoded_payload}"
+        
+        await message.reply_text(
+            f"Here is your link:\n`{share_link}`",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔗 SHARE URL", url=f"https://t.me/share/url?url={share_link}")]])
+        )
+
 @app.on_message(filters.command("genlink") & filters.private)
 async def genlink_prompt(client: Client, message: Message):
     USER_BATCH_STATE[message.from_user.id] = {"state": "waiting_genlink"}
@@ -190,22 +216,6 @@ async def batch_prompt(client: Client, message: Message):
 async def handle_interactive_steps(client: Client, message: Message):
     user_id = message.from_user.id
     if user_id not in USER_BATCH_STATE:
-        media = message.document or message.video or message.audio
-        if media:
-            file_id = media.file_id
-            file_name = getattr(media, "file_name", "Unknown File")
-            file_size = media.file_size
-            
-            inserted_id = await db.save_file(file_id, file_name, file_size)
-            encoded_payload = encode_id(inserted_id)
-            bot_username = (await client.get_me()).username
-            share_link = f"https://t.me/{bot_username}?start={encoded_payload}"
-            
-            await message.reply_text(
-                f"✅ **File Saved Successfully!**\n\n"
-                f"📁 **Name:** {file_name}\n"
-                f"🔗 **Share Link:**\n`{share_link}`"
-            )
         return
 
     state_data = USER_BATCH_STATE[user_id]
@@ -221,8 +231,9 @@ async def handle_interactive_steps(client: Client, message: Message):
         file_name = getattr(media, "file_name", "Unknown File")
         file_size = media.file_size
         
-        inserted_id = await db.save_file(file_id, file_name, file_size)
-        encoded_payload = encode_id(inserted_id)
+        custom_id = message.forward_from_message_id if message.forward_from_message_id else None
+        inserted_id = await db.save_file(file_id, file_name, file_size, custom_id=custom_id)
+        encoded_payload = encode_id(str(inserted_id))
         bot_username = (await client.get_me()).username
         share_link = f"https://t.me/{bot_username}?start={encoded_payload}"
         
