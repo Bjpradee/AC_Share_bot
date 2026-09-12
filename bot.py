@@ -76,11 +76,7 @@ async def check_force_sub(client: Client, user_id: int):
         return InlineKeyboardMarkup(buttons)
     return True
 
-@app.on_message(filters.private & ~filters.command(["start"]))
-async def track_user_middleware(client: Client, message: Message):
-    await db.add_user(message.from_user.id)
-
-@app.on_message(filters.command("start"))
+@app.on_message(filters.command("start") & filters.private)
 async def start_handler(client: Client, message: Message):
     user_id = message.from_user.id
     await db.add_user(user_id)
@@ -335,10 +331,14 @@ async def batch_prompt(client: Client, message: Message):
     USER_BATCH_STATE[message.from_user.id] = {"state": "waiting_batch_first"}
     await message.reply_text("Forward The Batch **First Message** From Your Batch Channel (With Forward Tag), or Give Me Batch First Message link from your batch channel")
 
-# Unified Media & Interactive Handler (with command exclusion & proper return to prevent duplicates)
-@app.on_message(filters.private & (filters.document | filters.video | filters.audio) & ~filters.command(["addfsub", "remfsub", "fsublist", "genlink", "batch", "settings", "stats", "start", "broadcast"]))
+# Unified Media & Interactive Handler
+@app.on_message(filters.private & (filters.document | filters.video | filters.audio))
 async def unified_media_handler(client: Client, message: Message):
     user_id = message.from_user.id
+    
+    # Track user if they send media
+    await db.add_user(user_id)
+    
     media = message.document or message.video or message.audio
     
     if user_id in USER_BATCH_STATE:
