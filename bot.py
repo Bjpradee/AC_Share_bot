@@ -8,7 +8,7 @@ except RuntimeError:
 import logging
 import base64
 from pyrogram import Client, filters
-from pyrogram.types import Message
+from pyrogram.types import Message, BotCommand
 from config import API_ID, API_HASH, BOT_TOKEN
 from database import db
 
@@ -27,6 +27,15 @@ def encode_id(string_id):
 def decode_id(encoded_string):
     encoded_string += "=" * (-len(encoded_string) % 4)
     return base64.urlsafe_b64decode(encoded_string.encode("ascii")).decode("ascii")
+
+# Bot start aagum pothu Menu Commands-ah set panra function
+async def set_bot_commands(client):
+    commands = [
+        BotCommand("start", "Check i am alive"),
+        BotCommand("genlink", "To store a single message or file"),
+        BotCommand("batch", "To store multiple messages from a channel")
+    ]
+    await client.set_bot_commands(commands)
 
 @app.on_message(filters.command("start"))
 async def start_handler(client: Client, message: Message):
@@ -49,32 +58,66 @@ async def start_handler(client: Client, message: Message):
     else:
         await message.reply_text(
             "👋 Vanakkam da mapla!\n"
-            "Enna use panni files-ah store pannikalam. Oru file-ah forward pannu, link tharen!"
+            "Enna use panni files-ah store pannikalam. Oru file-ah forward pannu, illana `/genlink` use pannu!"
         )
+
+# /genlink command handler
+@app.on_message(filters.command("genlink") & filters.private)
+async def genlink_handler(client: Client, message: Message):
+    reply_message = message.reply_to_message
+    if not reply_message:
+        await message.reply_text("❌ Oru file-ah reply panni `/genlink` nu podu da mapla!")
+        return
+    
+    media = reply_message.document or reply_message.video or reply_message.audio
+    if not media:
+        await message.reply_text("❌ Athu file/media illa da! Valid file-ah select panni reply pannu.")
+        return
+        
+    file_id = media.file_id
+    file_name = getattr(media, "file_name", "Unknown File")
+    file_size = media.file_size
+    
+    inserted_id = await db.save_file(file_id, file_name, file_size)
+    encoded_payload = encode_id(inserted_id)
+    
+    bot_username = (await client.get_me()).username
+    share_link = f"https://t.me/{bot_username}?start={encoded_payload}"
+    
+    await message.reply_text(
+        f"✅ **Link Generated Successfully!**\n\n"
+        f"📁 **Name:** {file_name}\n"
+        f"🔗 **Share Link:**\n`{share_link}`"
+    )
+
+# /batch command placeholder
+@app.on_message(filters.command("batch") & filters.private)
+async def batch_handler(client: Client, message: Message):
+    await message.reply_text("⚙️ **Batch feature** inum konja nerathula complete-ah update panniralam da mapla!")
 
 @app.on_message(filters.document | filters.video | filters.audio)
 async def store_file(client: Client, message: Message):
-    try:
-        media = message.document or message.video or message.audio
-        if media:
-            file_id = media.file_id
-            file_name = getattr(media, "file_name", "Unknown File")
-            file_size = media.file_size
-            
-            inserted_id = await db.save_file(file_id, file_name, file_size)
-            encoded_payload = encode_id(inserted_id)
-            
-            bot_username = (await client.get_me()).username
-            share_link = f"https://t.me/{bot_username}?start={encoded_payload}"
-            
-            await message.reply_text(
-                f"✅ **File Saved Successfully!**\n\n"
-                f"📁 **Name:** {file_name}\n"
-                f"🔗 **Share Link:**\n`{share_link}`"
-            )
-    except Exception as e:
-        await message.reply_text(f"❌ Error vanthiruchu da: `{e}`")
+    media = message.document or message.video or message.audio
+    if media:
+        file_id = media.file_id
+        file_name = getattr(media, "file_name", "Unknown File")
+        file_size = media.file_size
+        
+        inserted_id = await db.save_file(file_id, file_name, file_size)
+        encoded_payload = encode_id(inserted_id)
+        
+        bot_username = (await client.get_me()).username
+        share_link = f"https://t.me/{bot_username}?start={encoded_payload}"
+        
+        await message.reply_text(
+            f"✅ **File Saved Successfully!**\n\n"
+            f"📁 **Name:** {file_name}\n"
+            f"🔗 **Share Link:**\n`{share_link}`"
+        )
 
 if __name__ == "__main__":
     print("🤖 Bot is starting cleanly...")
-    app.run()
+    app.start()
+    asyncio.get_event_loop().run_until_complete(set_bot_commands(app))
+    print("🔥 Bot Commands Menu set successfully!")
+    app.idle()
