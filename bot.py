@@ -7,7 +7,7 @@ except RuntimeError:
 
 import logging
 import base64
-from pyrogram import Client, filters
+from pyrogram import Client, filters, idle
 from pyrogram.types import Message, BotCommand
 from config import API_ID, API_HASH, BOT_TOKEN
 from database import db
@@ -87,6 +87,10 @@ async def batch_handler(client: Client, message: Message):
     await message.reply_text("⚙️ **Batch feature** inum konja nerathula complete-ah update panniralam da mapla!")
 
 @app.on_message(filters.document | filters.video | filters.audio)
+alias store_file(client: Client, message: Message):
+    pass
+
+@app.on_message(filters.document | filters.video | filters.audio)
 async def store_file(client: Client, message: Message):
     media = message.document or message.video or message.audio
     if media:
@@ -115,7 +119,8 @@ async def main():
     ]
     await app.set_bot_commands(commands)
     print("🔥 Bot Commands Menu set successfully & Bot is running!")
-    await app.idle()
+    await idle()
+    await app.stop()
 
 if __name__ == "__main__":
     print("🤖 Bot is starting cleanly...")
