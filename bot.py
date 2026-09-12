@@ -21,10 +21,9 @@ app = Client(
     bot_token=BOT_TOKEN
 )
 
-# Temporary storage for interactive states and settings
 USER_BATCH_STATE = {}
 BOT_SETTINGS = {
-    "auto_delete_time": 15 * 60  # Default 15 minutes in seconds
+    "auto_delete_time": 15 * 60  # Default 15 minutes
 }
 
 def encode_id(string_id):
@@ -39,7 +38,6 @@ def extract_message_id(message: Message):
         return message.forward_from_message_id
     return message.id
 
-# Background task to auto-delete sent messages after specified time
 async def schedule_message_deletion(client: Client, chat_id: int, message_ids: list, delay_seconds: int):
     if delay_seconds <= 0:
         return
@@ -65,9 +63,16 @@ async def start_handler(client: Client, message: Message):
                 wait_msg = await message.reply_text("⏳ **Please wait... Sending your batch files.**")
                 sent_messages.append(wait_msg.id)
                 
+                # Fetch all files in range safely
+                files_sent_count = 0
                 for file_db_id in range(start_id, end_id + 1):
                     file_data = await db.get_file(str(file_db_id))
+                    if not file_data:
+                        # Try integer search if string fails
+                        file_data = await db.get_file(file_db_id)
+                        
                     if file_data:
+                        files_sent_count += 1
                         keyboard = InlineKeyboardMarkup(
                             [[InlineKeyboardButton("📥 DOWNLOAD", callback_data=f"dl_{file_db_id}")]]
                         )
@@ -78,11 +83,16 @@ async def start_handler(client: Client, message: Message):
                             reply_markup=keyboard
                         )
                         sent_messages.append(sent_msg.id)
-                        await asyncio.sleep(0.8)
+                        await asyncio.sleep(0.5)
                 
-                mins_text = int(BOT_SETTINGS["auto_delete_time"] / 60)
-                warning_msg = await message.reply_text(f"⚠️ **Important:**\nAll messages will be deleted after {mins_text} minutes. Please save or forward these messages to your personal saved messages to avoid losing them!")
-                sent_messages.append(warning_msg.id)
+                if files_sent_count == 0:
+                    err_msg = await message.reply_text("❌ No files found in this batch range!")
+                    sent_messages.append(err_msg.id)
+                else:
+                    mins_text = int(BOT_SETTINGS["auto_delete_time"] / 60)
+                    if BOT_SETTINGS["auto_delete_time"] > 0:
+                        warning_msg = await message.reply_text(f"⚠️ **Important:**\nAll messages will be deleted after {mins_text} minutes. Please save or forward these messages to your personal saved messages to avoid losing them!")
+                        sent_messages.append(warning_msg.id)
             else:
                 file_data = await db.get_file(decoded_payload)
                 if file_data:
@@ -100,11 +110,11 @@ async def start_handler(client: Client, message: Message):
                     err_msg = await message.reply_text("❌ File not found or deleted from database!")
                     sent_messages.append(err_msg.id)
             
-            # Trigger auto delete if enabled
             if BOT_SETTINGS["auto_delete_time"] > 0 and sent_messages:
                 asyncio.create_task(schedule_message_deletion(client, message.chat.id, sent_messages, BOT_SETTINGS["auto_delete_time"]))
                 
         except Exception as e:
+            logging.error(f"Error in start link handler: {e}")
             await message.reply_text("❌ Invalid link or expired batch!")
     else:
         await message.reply_text(
@@ -112,7 +122,6 @@ async def start_handler(client: Client, message: Message):
             "Enna use panni files-ah store pannikalam. Use `/genlink`, `/batch` or `/settings` from the menu!"
         )
 
-# /settings command to adjust auto-delete timer
 @app.on_message(filters.command("settings") & filters.private)
 async def settings_handler(client: Client, message: Message):
     current_mins = int(BOT_SETTINGS["auto_delete_time"] / 60) if BOT_SETTINGS["auto_delete_time"] > 0 else "Off"
@@ -133,7 +142,6 @@ async def settings_handler(client: Client, message: Message):
         reply_markup=keyboard
     )
 
-# Callback for settings changes
 @app.on_callback_query(filters.regex(r"^set_time_"))
 async def set_time_callback(client: Client, callback_query: CallbackQuery):
     seconds = int(callback_query.data.split("_")[2])
@@ -146,11 +154,16 @@ async def set_time_callback(client: Client, callback_query: CallbackQuery):
     )
     await callback_query.answer("Settings updated!", show_alert=False)
 
-# Callback query for DOWNLOAD button
 @app.on_callback_query(filters.regex(r"^dl_"))
 async def download_callback(client: Client, callback_query: CallbackQuery):
     file_db_id = callback_query.data.split("_")[1]
     file_data = await db.get_file(file_db_id)
+    if not file_data:
+        try:
+            file_data = await db.get_file(int(file_db_id))
+        except:
+            pass
+            
     if file_data:
         sent_msg = await client.send_cached_media(
             chat_id=callback_query.message.chat.id,
@@ -163,19 +176,16 @@ async def download_callback(client: Client, callback_query: CallbackQuery):
     else:
         await callback_query.answer("❌ File expired or missing!", show_alert=True)
 
-# /genlink interactive flow
 @app.on_message(filters.command("genlink") & filters.private)
 async def genlink_prompt(client: Client, message: Message):
     USER_BATCH_STATE[message.from_user.id] = {"state": "waiting_genlink"}
     await message.reply_text("📤 **Send A Message/File For To Get Your Shareable Link**")
 
-# /batch interactive flow - Step 1
 @app.on_message(filters.command("batch") & filters.private)
 async def batch_prompt(client: Client, message: Message):
     USER_BATCH_STATE[message.from_user.id] = {"state": "waiting_batch_first"}
     await message.reply_text("Forward The Batch **First Message** From Your Batch Channel (With Forward Tag), or Give Me Batch First Message link from your batch channel")
 
-# Handle incoming messages for interactive steps
 @app.on_message(filters.private & ~filters.command(["start", "genlink", "batch", "settings", "broadcast"]))
 async def handle_interactive_steps(client: Client, message: Message):
     user_id = message.from_user.id
