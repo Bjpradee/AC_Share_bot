@@ -1,7 +1,6 @@
-import os
-
-API_ID = int(os.getenv("API_ID", "0"))
-API_HASH = os.getenv("API_HASH", "")
-BOT_TOKEN = os.getenv("BOT_TOKEN", "")
-MONGO_URI = os.getenv("MONGO_URI", "")
-DB_NAME = os.getenv("DB_NAME", "AnimeStoreBot")
+API_ID = 1234567          # Unoda API ID
+API_HASH = "your_hash"    # Unoda API Hash
+BOT_TOKEN = "your_token"  # Unoda Bot Token
+MONGO_URI = "your_mongo"  # Unoda MongoDB URI
+DB_NAME = "AnimeStore"    # Database Name
+OWNER_ID = 5756724122     # Unoda Admin User ID
