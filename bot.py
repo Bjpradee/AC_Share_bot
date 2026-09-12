@@ -9,7 +9,8 @@ import logging
 import base64
 from pyrogram import Client, filters, idle
 from pyrogram.types import Message, BotCommand, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
-from config import API_ID, API_HASH, BOT_TOKEN
+from pyrogram.errors import UserNotParticipant
+from config import API_ID, API_HASH, BOT_TOKEN, OWNER_ID
 from database import db
 
 logging.basicConfig(level=logging.INFO)
@@ -48,8 +49,52 @@ async def schedule_message_deletion(client: Client, chat_id: int, message_ids: l
         except Exception as e:
             pass
 
+# Dynamic Force Subscription Checker fetching from database
+async def check_force_sub(client: Client, user_id: int):
+    channels = await db.get_fsub_channels()
+    if not channels:
+        return True
+        
+    buttons = []
+    for channel in channels:
+        try:
+            chat = await client.get_chat(channel)
+            member = await client.get_chat_member(channel, user_id)
+            if member.status in ["left", "kicked"]:
+                buttons.append([InlineKeyboardButton(f"📢 Join {chat.title}", url=chat.invite_link or f"https://t.me/{channel}")])
+        except UserNotParticipant:
+            try:
+                chat = await client.get_chat(channel)
+                invite_link = chat.invite_link or f"https://t.me/{channel}"
+                buttons.append([InlineKeyboardButton(f"📢 Join {chat.title}", url=invite_link)])
+            except Exception:
+                pass
+        except Exception:
+            pass
+            
+    if buttons:
+        buttons.append([InlineKeyboardButton("🔄 Try Again", callback_data="check_fs")])
+        return InlineKeyboardMarkup(buttons)
+    return True
+
+@app.on_message(filters.private & ~filters.command(["start"]))
+async def track_user_middleware(client: Client, message: Message):
+    await db.add_user(message.from_user.id)
+
 @app.on_message(filters.command("start"))
 async def start_handler(client: Client, message: Message):
+    user_id = message.from_user.id
+    await db.add_user(user_id)
+    
+    fs_check = await check_force_sub(client, user_id)
+    if fs_check is not True:
+        await message.reply_text(
+            "🔒 **Access Denied!**\n\n"
+            "You must join our channels below to use this bot. After joining, click **'🔄 Try Again'**.",
+            reply_markup=fs_check
+        )
+        return
+
     if len(message.command) > 1:
         encoded_payload = message.command[1]
         sent_messages = []
@@ -126,6 +171,16 @@ async def start_handler(client: Client, message: Message):
             "Enna use panni files-ah store pannikalam. Use `/genlink`, `/batch` or `/settings` from the menu!"
         )
 
+@app.on_callback_query(filters.regex(r"^check_fs$"))
+async def check_fs_callback(client: Client, callback_query: CallbackQuery):
+    user_id = callback_query.from_user.id
+    fs_check = await check_force_sub(client, user_id)
+    if fs_check is True:
+        await callback_query.message.delete()
+        await callback_query.message.reply_text("✅ Thank you for joining! Now you can use the bot. Send `/start` again.")
+    else:
+        await callback_query.answer("❌ You haven't joined all channels yet!", show_alert=True)
+
 @app.on_message(filters.command("settings") & filters.private)
 async def settings_handler(client: Client, message: Message):
     current_mins = int(BOT_SETTINGS["auto_delete_time"] / 60) if BOT_SETTINGS["auto_delete_time"] > 0 else "Off"
@@ -160,6 +215,12 @@ async def set_time_callback(client: Client, callback_query: CallbackQuery):
 
 @app.on_callback_query(filters.regex(r"^dl_"))
 async def download_callback(client: Client, callback_query: CallbackQuery):
+    user_id = callback_query.from_user.id
+    fs_check = await check_force_sub(client, user_id)
+    if fs_check is not True:
+        await callback_query.answer("❌ Please join our channels first!", show_alert=True)
+        return
+
     file_db_id = callback_query.data.split("_")[1]
     file_data = await db.get_file(file_db_id)
     if not file_data:
@@ -180,13 +241,98 @@ async def download_callback(client: Client, callback_query: CallbackQuery):
     else:
         await callback_query.answer("❌ File expired or missing!", show_alert=True)
 
+# Admin Commands: Stats, Broadcast & Dynamic Force Sub Management
+@app.on_message(filters.command("stats") & filters.private)
+async def stats_handler(client: Client, message: Message):
+    if message.from_user.id != OWNER_ID:
+        return
+    count = await db.total_users_count()
+    channels = await db.get_fsub_channels()
+    await message.reply_text(f"📊 **Bot Statistics**\n\n👥 Total Users: `{count}`\n📢 Active FSub Channels: `{len(channels)}`")
+
+@app.on_message(filters.command("addfsub") & filters.private)
+async def add_fsub_handler(client: Client, message: Message):
+    if message.from_user.id != OWNER_ID:
+        return
+    if len(message.command) < 2:
+        await message.reply_text("❌ Usage: `/addfsub ChannelUsername` (eg: `/addfsub Anime_Control_Tamil`)")
+        return
+    
+    new_channel = message.command[1].replace("@", "")
+    channels = await db.get_fsub_channels()
+    if len(channels) >= 4:
+        await message.reply_text("❌ Maximum 4 Force Sub channels are allowed!")
+        return
+    if new_channel in channels:
+        await message.reply_text("⚠️ This channel is already in Force Sub list!")
+        return
+        
+    channels.append(new_channel)
+    await db.set_fsub_channels(channels)
+    await message.reply_text(f"✅ Successfully added `@{new_channel}` to Force Sub channels!")
+
+@app.on_message(filters.command("remfsub") & filters.private)
+async def rem_fsub_handler(client: Client, message: Message):
+    if message.from_user.id != OWNER_ID:
+        return
+    if len(message.command) < 2:
+        await message.reply_text("❌ Usage: `/remfsub ChannelUsername`")
+        return
+        
+    target = message.command[1].replace("@", "")
+    channels = await db.get_fsub_channels()
+    if target in channels:
+        channels.remove(target)
+        await db.set_fsub_channels(channels)
+        await message.reply_text(f"✅ Removed `@{target}` from Force Sub list!")
+    else:
+        await message.reply_text("❌ Channel not found in Force Sub list!")
+
+@app.on_message(filters.command("fsublist") & filters.private)
+async def fsub_list_handler(client: Client, message: Message):
+    if message.from_user.id != OWNER_ID:
+        return
+    channels = await db.get_fsub_channels()
+    if not channels:
+        await message.reply_text("📂 Force Sub is currently disabled (No channels added).")
+        return
+    
+    text = "📢 **Current Force Sub Channels:**\n\n"
+    for idx, ch in enumerate(channels, 1):
+        text += f"{idx}. `@{ch}`\n"
+    await message.reply_text(text)
+
+@app.on_message(filters.command("broadcast") & filters.private)
+async def broadcast_handler(client: Client, message: Message):
+    if message.from_user.id != OWNER_ID:
+        return
+    reply = message.reply_to_message
+    if not reply:
+        await message.reply_text("❌ Oru message-ah reply panni `/broadcast` nu podu da mapla!")
+        return
+        
+    sent = 0
+    users = await db.get_all_users()
+    async for user in users:
+        try:
+            await reply.copy(chat_id=user["user_id"])
+            sent += 1
+            await asyncio.sleep(0.05)
+        except Exception:
+            pass
+    await message.reply_text(f"✅ Broadcast completed successfully to `{sent}` users!")
+
 @app.on_message(filters.command("genlink") & filters.private)
 async def genlink_prompt(client: Client, message: Message):
+    if message.from_user.id != OWNER_ID:
+        return
     USER_BATCH_STATE[message.from_user.id] = {"state": "waiting_genlink"}
     await message.reply_text("📤 **Send A Message/File For To Get Your Shareable Link**")
 
 @app.on_message(filters.command("batch") & filters.private)
 async def batch_prompt(client: Client, message: Message):
+    if message.from_user.id != OWNER_ID:
+        return
     USER_BATCH_STATE[message.from_user.id] = {"state": "waiting_batch_first"}
     await message.reply_text("Forward The Batch **First Message** From Your Batch Channel (With Forward Tag), or Give Me Batch First Message link from your batch channel")
 
@@ -256,7 +402,9 @@ async def unified_media_handler(client: Client, message: Message):
             )
             return
 
-    # Normal direct file store when not in any interactive state
+    if user_id != OWNER_ID:
+        return
+
     file_id = media.file_id
     file_name = getattr(media, "file_name", "Unknown File")
     file_size = media.file_size
@@ -278,7 +426,11 @@ async def main():
         BotCommand("start", "Check i am alive"),
         BotCommand("genlink", "To store a single message or file"),
         BotCommand("batch", "To store multiple messages from a channel"),
-        BotCommand("settings", "Customize your settings as your need")
+        BotCommand("settings", "Customize your settings as your need"),
+        BotCommand("stats", "View bot statistics"),
+        BotCommand("addfsub", "Add channel to force sub"),
+        BotCommand("remfsub", "Remove channel from force sub"),
+        BotCommand("fsublist", "View active force sub channels")
     ]
     await app.set_bot_commands(commands)
     print("🔥 Bot Commands Menu set successfully & Bot is running!")
