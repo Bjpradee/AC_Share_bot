@@ -180,30 +180,6 @@ async def download_callback(client: Client, callback_query: CallbackQuery):
     else:
         await callback_query.answer("❌ File expired or missing!", show_alert=True)
 
-# Direct file store handler (IGNORES if user is in batch/genlink interactive state)
-@app.on_message(filters.private & (filters.document | filters.video | filters.audio))
-async def direct_file_store(client: Client, message: Message):
-    user_id = message.from_user.id
-    if user_id in USER_BATCH_STATE:
-        return  # Let batch/genlink interactive handler take care of it!
-
-    media = message.document or message.video or message.audio
-    if media:
-        file_id = media.file_id
-        file_name = getattr(media, "file_name", "Unknown File")
-        file_size = media.file_size
-        
-        custom_id = message.forward_from_message_id if message.forward_from_message_id else None
-        inserted_id = await db.save_file(file_id, file_name, file_size, custom_id=custom_id)
-        encoded_payload = encode_id(str(inserted_id))
-        bot_username = (await client.get_me()).username
-        share_link = f"https://t.me/{bot_username}?start={encoded_payload}"
-        
-        await message.reply_text(
-            f"Here is your link:\n`{share_link}`",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔗 SHARE URL", url=f"https://t.me/share/url?url={share_link}")]])
-        )
-
 @app.on_message(filters.command("genlink") & filters.private)
 async def genlink_prompt(client: Client, message: Message):
     USER_BATCH_STATE[message.from_user.id] = {"state": "waiting_genlink"}
@@ -214,76 +190,87 @@ async def batch_prompt(client: Client, message: Message):
     USER_BATCH_STATE[message.from_user.id] = {"state": "waiting_batch_first"}
     await message.reply_text("Forward The Batch **First Message** From Your Batch Channel (With Forward Tag), or Give Me Batch First Message link from your batch channel")
 
-@app.on_message(filters.private & ~filters.command(["start", "genlink", "batch", "settings", "broadcast"]))
-async def handle_interactive_steps(client: Client, message: Message):
+# Unified media & interactive handler
+@app.on_message(filters.private & (filters.document | filters.video | filters.audio))
+async def unified_media_handler(client: Client, message: Message):
     user_id = message.from_user.id
-    if user_id not in USER_BATCH_STATE:
-        return
+    media = message.document or message.video or message.audio
+    
+    if user_id in USER_BATCH_STATE:
+        state_data = USER_BATCH_STATE[user_id]
+        current_state = state_data.get("state")
 
-    state_data = USER_BATCH_STATE[user_id]
-    current_state = state_data.get("state")
-
-    if current_state == "waiting_genlink":
-        media = message.document or message.video or message.audio
-        if not media:
-            await message.reply_text("❌ Athu file illa da! Valid file-ah forward pannu.")
+        if current_state == "waiting_genlink":
+            file_id = media.file_id
+            file_name = getattr(media, "file_name", "Unknown File")
+            file_size = media.file_size
+            
+            custom_id = extract_message_id(message)
+            inserted_id = await db.save_file(file_id, file_name, file_size, custom_id=custom_id)
+            encoded_payload = encode_id(str(inserted_id))
+            bot_username = (await client.get_me()).username
+            share_link = f"https://t.me/{bot_username}?start={encoded_payload}"
+            
+            del USER_BATCH_STATE[user_id]
+            await message.reply_text(
+                f"Here is your link:\n`{share_link}`",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔗 SHARE URL", url=f"https://t.me/share/url?url={share_link}")]])
+            )
             return
-        
-        file_id = media.file_id
-        file_name = getattr(media, "file_name", "Unknown File")
-        file_size = media.file_size
-        
-        custom_id = message.forward_from_message_id if message.forward_from_message_id else None
-        inserted_id = await db.save_file(file_id, file_name, file_size, custom_id=custom_id)
-        encoded_payload = encode_id(str(inserted_id))
-        bot_username = (await client.get_me()).username
-        share_link = f"https://t.me/{bot_username}?start={encoded_payload}"
-        
-        del USER_BATCH_STATE[user_id]
-        await message.reply_text(
-            f"Here is your link:\n`{share_link}`",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔗 SHARE URL", url=f"https://t.me/share/url?url={share_link}")]])
-        )
 
-    elif current_state == "waiting_batch_first":
-        media = message.document or message.video or message.audio
-        if media:
+        elif current_state == "waiting_batch_first":
             file_id = media.file_id
             file_name = getattr(media, "file_name", "Unknown File")
             file_size = media.file_size
             custom_id = extract_message_id(message)
             await db.save_file(file_id, file_name, file_size, custom_id=custom_id)
 
-        msg_id = extract_message_id(message)
-        USER_BATCH_STATE[user_id]["first_id"] = msg_id
-        USER_BATCH_STATE[user_id]["state"] = "waiting_batch_last"
-        await message.reply_text("Forward The Batch **Last Message** From Your Batch Channel (With Forward Tag), or Give Me Batch last message link from your batch channel")
+            msg_id = extract_message_id(message)
+            USER_BATCH_STATE[user_id]["first_id"] = msg_id
+            USER_BATCH_STATE[user_id]["state"] = "waiting_batch_last"
+            await message.reply_text("Forward The Batch **Last Message** From Your Batch Channel (With Forward Tag), or Give Me Batch last message link from your batch channel")
+            return
 
-    elif current_state == "waiting_batch_last":
-        media = message.document or message.video or message.audio
-        if media:
+        elif current_state == "waiting_batch_last":
             file_id = media.file_id
             file_name = getattr(media, "file_name", "Unknown File")
             file_size = media.file_size
             custom_id = extract_message_id(message)
             await db.save_file(file_id, file_name, file_size, custom_id=custom_id)
 
-        first_id = state_data.get("first_id")
-        last_id = extract_message_id(message)
-        
-        start_id = min(int(first_id), int(last_id))
-        end_id = max(int(first_id), int(last_id))
-        
-        payload = f"{start_id}-{end_id}"
-        encoded_payload = encode_id(payload)
-        bot_username = (await client.get_me()).username
-        batch_link = f"https://t.me/{bot_username}?start={encoded_payload}"
-        
-        del USER_BATCH_STATE[user_id]
-        await message.reply_text(
-            f"Here is your link:\n`{batch_link}`",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔗 SHARE URL", url=f"https://t.me/share/url?url={batch_link}")]])
-        )
+            first_id = state_data.get("first_id")
+            last_id = extract_message_id(message)
+            
+            start_id = min(int(first_id), int(last_id))
+            end_id = max(int(first_id), int(last_id))
+            
+            payload = f"{start_id}-{end_id}"
+            encoded_payload = encode_id(payload)
+            bot_username = (await client.get_me()).username
+            batch_link = f"https://t.me/{bot_username}?start={encoded_payload}"
+            
+            del USER_BATCH_STATE[user_id]
+            await message.reply_text(
+                f"Here is your link:\n`{batch_link}`",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔗 SHARE URL", url=f"https://t.me/share/url?url={batch_link}")]])
+            )
+            return
+
+    # Normal direct file store when not in any interactive state
+    file_id = media.file_id
+    file_name = getattr(media, "file_name", "Unknown File")
+    file_size = media.file_size
+    custom_id = extract_message_id(message)
+    
+    inserted_id = await db.save_file(file_id, file_name, file_size, custom_id=custom_id)
+    encoded_payload = encode_id(str(inserted_id))
+    bot_username = (await client.get_me()).username
+    share_link = f"https://t.me/{bot_username}?start={encoded_payload}"
+    
+    await message.reply_text(
+        f"Here is your link:\n`{share_link}`",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔗 SHARE URL", url=f"https://t.me/share/url?url={share_link}")]])
+    )
 
 async def main():
     await app.start()
