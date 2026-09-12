@@ -49,6 +49,7 @@ async def schedule_message_deletion(client: Client, chat_id: int, message_ids: l
         except Exception as e:
             pass
 
+# Robust Force Sub Checker supporting both Public Usernames and Private Invite Links / IDs
 async def check_force_sub(client: Client, user_id: int):
     channels = await db.get_fsub_channels()
     if not channels:
@@ -56,19 +57,36 @@ async def check_force_sub(client: Client, user_id: int):
         
     buttons = []
     for channel in channels:
+        channel = channel.strip()
         try:
-            chat = await client.get_chat(channel)
-            member = await client.get_chat_member(channel, user_id)
+            chat_id = channel
+            if channel.startswith("https://t.me/+"):
+                chat = await client.get_chat(channel)
+                chat_id = chat.id
+                invite_link = channel
+            elif channel.startswith("@") or not channel.startswith("-"):
+                chat = await client.get_chat(channel)
+                chat_id = chat.id
+                invite_link = chat.invite_link or f"https://t.me/{channel.replace('@', '')}"
+            else:
+                chat = await client.get_chat(int(channel))
+                chat_id = chat.id
+                invite_link = chat.invite_link or f"https://t.me/{chat.username}" if chat.username else None
+
+            member = await client.get_chat_member(chat_id, user_id)
             if member.status in ["left", "kicked"]:
-                buttons.append([InlineKeyboardButton(f"📢 Join {chat.title}", url=chat.invite_link or f"https://t.me/{channel}")])
+                if invite_link:
+                    buttons.append([InlineKeyboardButton(f"📢 Join {chat.title}", url=invite_link)])
         except UserNotParticipant:
             try:
-                chat = await client.get_chat(channel)
-                invite_link = chat.invite_link or f"https://t.me/{channel}"
-                buttons.append([InlineKeyboardButton(f"📢 Join {chat.title}", url=invite_link)])
+                chat = await client.get_chat(chat_id)
+                invite_link = chat.invite_link or (f"https://t.me/{chat.username}" if chat.username else channel)
+                if invite_link.startswith("http"):
+                    buttons.append([InlineKeyboardButton(f"📢 Join {chat.title}", url=invite_link)])
             except Exception:
                 pass
-        except Exception:
+        except Exception as e:
+            logging.error(f"FSub check error for {channel}: {e}")
             pass
             
     if buttons:
@@ -81,14 +99,16 @@ async def start_handler(client: Client, message: Message):
     user_id = message.from_user.id
     await db.add_user(user_id)
     
-    fs_check = await check_force_sub(client, user_id)
-    if fs_check is not True:
-        await message.reply_text(
-            "🔒 **Access Denied!**\n\n"
-            "You must join our channels below to use this bot. After joining, click **'🔄 Try Again'**.",
-            reply_markup=fs_check
-        )
-        return
+    # OWNER CAN ALWAYS BYPASS FORCE SUB TO TEST OR NAVIGATE
+    if user_id != OWNER_ID:
+        fs_check = await check_force_sub(client, user_id)
+        if fs_check is not True:
+            await message.reply_text(
+                "🔒 **Access Denied!**\n\n"
+                "You must join our channels below to use this bot and access files. After joining, click **'🔄 Try Again'**.",
+                reply_markup=fs_check
+            )
+            return
 
     if len(message.command) > 1:
         encoded_payload = message.command[1]
@@ -111,14 +131,10 @@ async def start_handler(client: Client, message: Message):
                         
                     if file_data:
                         files_sent_count += 1
-                        keyboard = InlineKeyboardMarkup(
-                            [[InlineKeyboardButton("📥 DOWNLOAD", callback_data=f"dl_{file_db_id}")]]
-                        )
+                        # Send file cleanly WITHOUT any forced extra download buttons
                         sent_msg = await client.send_cached_media(
                             chat_id=message.chat.id,
-                            file_id=file_data["file_id"],
-                            caption=f"📁 **{file_data['file_name']}**\n\n📥 Downloaded via @Anime_Control_Tamil Store Bot",
-                            reply_markup=keyboard
+                            file_id=file_data["file_id"]
                         )
                         sent_messages.append(sent_msg.id)
                         await asyncio.sleep(0.5)
@@ -140,14 +156,9 @@ async def start_handler(client: Client, message: Message):
                         pass
 
                 if file_data:
-                    keyboard = InlineKeyboardMarkup(
-                        [[InlineKeyboardButton("📥 DOWNLOAD", callback_data=f"dl_{decoded_payload}")]]
-                    )
                     sent_msg = await client.send_cached_media(
                         chat_id=message.chat.id,
-                        file_id=file_data["file_id"],
-                        caption=f"📁 **{file_data['file_name']}**\n\n📥 Downloaded via @Anime_Control_Tamil Store Bot",
-                        reply_markup=keyboard
+                        file_id=file_data["file_id"]
                     )
                     sent_messages.append(sent_msg.id)
                 else:
@@ -161,10 +172,15 @@ async def start_handler(client: Client, message: Message):
             logging.error(f"Error in start link handler: {e}")
             await message.reply_text("❌ Invalid link or expired batch!")
     else:
-        await message.reply_text(
-            "👋 Vanakkam da mapla!\n"
-            "Enna use panni files-ah store pannikalam. Use `/genlink`, `/batch` or `/settings` from the menu!"
-        )
+        if user_id == OWNER_ID:
+            await message.reply_text(
+                "👋 Vanakkam da mapla!\n"
+                "Use `/genlink`, `/batch`, `/addfsub`, `/remfsub`, `/fsublist`, or `/stats`."
+            )
+        else:
+            await message.reply_text(
+                "👋 Welcome! Send or click file links provided by our channel to access content."
+            )
 
 @app.on_callback_query(filters.regex(r"^check_fs$"))
 async def check_fs_callback(client: Client, callback_query: CallbackQuery):
@@ -172,12 +188,14 @@ async def check_fs_callback(client: Client, callback_query: CallbackQuery):
     fs_check = await check_force_sub(client, user_id)
     if fs_check is True:
         await callback_query.message.delete()
-        await callback_query.message.reply_text("✅ Thank you for joining! Now you can use the bot. Send `/start` again.")
+        await callback_query.message.reply_text("✅ Thank you for joining! Now you can access your files. Click your file link again.")
     else:
-        await callback_query.answer("❌ You haven't joined all channels yet!", show_alert=True)
+        await callback_query.answer("❌ You haven't joined all required channels yet!", show_alert=True)
 
 @app.on_message(filters.command("settings") & filters.private)
 async def settings_handler(client: Client, message: Message):
+    if message.from_user.id != OWNER_ID:
+        return
     current_mins = int(BOT_SETTINGS["auto_delete_time"] / 60) if BOT_SETTINGS["auto_delete_time"] > 0 else "Off"
     keyboard = InlineKeyboardMarkup([
         [
@@ -198,6 +216,8 @@ async def settings_handler(client: Client, message: Message):
 
 @app.on_callback_query(filters.regex(r"^set_time_"))
 async def set_time_callback(client: Client, callback_query: CallbackQuery):
+    if callback_query.from_user.id != OWNER_ID:
+        return
     seconds = int(callback_query.data.split("_")[2])
     BOT_SETTINGS["auto_delete_time"] = seconds
     mins_text = int(seconds / 60) if seconds > 0 else "Disabled"
@@ -207,34 +227,6 @@ async def set_time_callback(client: Client, callback_query: CallbackQuery):
         f"⏱️ **New Auto Delete Time:** {mins_text}"
     )
     await callback_query.answer("Settings updated!", show_alert=False)
-
-@app.on_callback_query(filters.regex(r"^dl_"))
-async def download_callback(client: Client, callback_query: CallbackQuery):
-    user_id = callback_query.from_user.id
-    fs_check = await check_force_sub(client, user_id)
-    if fs_check is not True:
-        await callback_query.answer("❌ Please join our channels first!", show_alert=True)
-        return
-
-    file_db_id = callback_query.data.split("_")[1]
-    file_data = await db.get_file(file_db_id)
-    if not file_data:
-        try:
-            file_data = await db.get_file(int(file_db_id))
-        except:
-            pass
-            
-    if file_data:
-        sent_msg = await client.send_cached_media(
-            chat_id=callback_query.message.chat.id,
-            file_id=file_data["file_id"],
-            caption=f"📁 **{file_data['file_name']}**\n\n📥 @Anime_Control_Tamil"
-        )
-        if BOT_SETTINGS["auto_delete_time"] > 0:
-            asyncio.create_task(schedule_message_deletion(client, callback_query.message.chat.id, [sent_msg.id], BOT_SETTINGS["auto_delete_time"]))
-        await callback_query.answer("Here is your file!", show_alert=False)
-    else:
-        await callback_query.answer("❌ File expired or missing!", show_alert=True)
 
 # Admin Commands
 @app.on_message(filters.command("stats") & filters.private)
@@ -250,10 +242,10 @@ async def add_fsub_handler(client: Client, message: Message):
     if message.from_user.id != OWNER_ID:
         return
     if len(message.command) < 2:
-        await message.reply_text("❌ Usage: `/addfsub ChannelUsername` (eg: `/addfsub Anime_Control_Tamil`)")
+        await message.reply_text("❌ Usage:\n• `/addfsub @channelname`\n• `/addfsub https://t.me/+invite_hash`")
         return
     
-    new_channel = message.command[1].replace("@", "")
+    new_channel = message.text.split(None, 1)[1].strip()
     channels = await db.get_fsub_channels()
     if len(channels) >= 4:
         await message.reply_text("❌ Maximum 4 Force Sub channels are allowed!")
@@ -264,24 +256,24 @@ async def add_fsub_handler(client: Client, message: Message):
         
     channels.append(new_channel)
     await db.set_fsub_channels(channels)
-    await message.reply_text(f"✅ Successfully added `@{new_channel}` to Force Sub channels!")
+    await message.reply_text(f"✅ Successfully added `{new_channel}` to Force Sub channels!")
 
 @app.on_message(filters.command("remfsub") & filters.private)
 async def rem_fsub_handler(client: Client, message: Message):
     if message.from_user.id != OWNER_ID:
         return
     if len(message.command) < 2:
-        await message.reply_text("❌ Usage: `/remfsub ChannelUsername`")
+        await message.reply_text("❌ Usage: `/remfsub @channelname` or invite link")
         return
         
-    target = message.command[1].replace("@", "")
+    target = message.text.split(None, 1)[1].strip()
     channels = await db.get_fsub_channels()
     if target in channels:
         channels.remove(target)
         await db.set_fsub_channels(channels)
-        await message.reply_text(f"✅ Removed `@{target}` from Force Sub list!")
+        await message.reply_text(f"✅ Removed `{target}` from Force Sub list!")
     else:
-        await message.reply_text("❌ Channel not found in Force Sub list!")
+        await message.reply_text("❌ Channel/Link not found in Force Sub list!")
 
 @app.on_message(filters.command("fsublist") & filters.private)
 async def fsub_list_handler(client: Client, message: Message):
@@ -294,7 +286,7 @@ async def fsub_list_handler(client: Client, message: Message):
     
     text = "📢 **Current Force Sub Channels:**\n\n"
     for idx, ch in enumerate(channels, 1):
-        text += f"{idx}. `@{ch}`\n"
+        text += f"{idx}. `{ch}`\n"
     await message.reply_text(text)
 
 @app.on_message(filters.command("broadcast") & filters.private)
@@ -322,7 +314,7 @@ async def genlink_prompt(client: Client, message: Message):
     if message.from_user.id != OWNER_ID:
         return
     USER_BATCH_STATE[message.from_user.id] = {"state": "waiting_genlink"}
-    await message.reply_text("📤 **Send A Message/File For To Get Your Shareable Link**")
+    await message.reply_text("📤 **Send Any Message (Video, Photo, Text with buttons, etc.) To Get Your Shareable Link**")
 
 @app.on_message(filters.command("batch") & filters.private)
 async def batch_prompt(client: Client, message: Message):
@@ -331,27 +323,31 @@ async def batch_prompt(client: Client, message: Message):
     USER_BATCH_STATE[message.from_user.id] = {"state": "waiting_batch_first"}
     await message.reply_text("Forward The Batch **First Message** From Your Batch Channel (With Forward Tag), or Give Me Batch First Message link from your batch channel")
 
-# Unified Media & Interactive Handler
-@app.on_message(filters.private & (filters.document | filters.video | filters.audio))
+# Unified Media & General Message Handler (Supports Videos, Photos, Documents, Audio, Text with Buttons)
+@app.on_message(filters.private & ~filters.command(["addfsub", "remfsub", "fsublist", "genlink", "batch", "settings", "stats", "start", "broadcast"]))
 async def unified_media_handler(client: Client, message: Message):
     user_id = message.from_user.id
     
-    # Track user if they send media
+    # ONLY OWNER CAN CREATE LINKS / STORE FILES
+    if user_id != OWNER_ID:
+        return
+
     await db.add_user(user_id)
-    
-    media = message.document or message.video or message.audio
     
     if user_id in USER_BATCH_STATE:
         state_data = USER_BATCH_STATE[user_id]
         current_state = state_data.get("state")
 
         if current_state == "waiting_genlink":
-            file_id = media.file_id
-            file_name = getattr(media, "file_name", "Unknown File")
-            file_size = media.file_size
-            
             custom_id = extract_message_id(message)
-            inserted_id = await db.save_file(file_id, file_name, file_size, custom_id=custom_id)
+            # Store the entire message object reference in database by saving message ID or copying message
+            # For robust multi-type support, we copy/store message details
+            inserted_id = await db.save_file(
+                file_id=message.id, # storing message ID from owner chat or channel
+                file_name=getattr(message.document or message.video or message.audio, "file_name", "Media Message"),
+                file_size=getattr(message.document or message.video or message.audio, "file_size", 0),
+                custom_id=custom_id
+            )
             encoded_payload = encode_id(str(inserted_id))
             bot_username = (await client.get_me()).username
             share_link = f"https://t.me/{bot_username}?start={encoded_payload}"
@@ -364,11 +360,13 @@ async def unified_media_handler(client: Client, message: Message):
             return
 
         elif current_state == "waiting_batch_first":
-            file_id = media.file_id
-            file_name = getattr(media, "file_name", "Unknown File")
-            file_size = media.file_size
             custom_id = extract_message_id(message)
-            await db.save_file(file_id, file_name, file_size, custom_id=custom_id)
+            await db.save_file(
+                file_id=message.id,
+                file_name="Batch First",
+                file_size=0,
+                custom_id=custom_id
+            )
 
             msg_id = extract_message_id(message)
             USER_BATCH_STATE[user_id]["first_id"] = msg_id
@@ -377,11 +375,13 @@ async def unified_media_handler(client: Client, message: Message):
             return
 
         elif current_state == "waiting_batch_last":
-            file_id = media.file_id
-            file_name = getattr(media, "file_name", "Unknown File")
-            file_size = media.file_size
             custom_id = extract_message_id(message)
-            await db.save_file(file_id, file_name, file_size, custom_id=custom_id)
+            await db.save_file(
+                file_id=message.id,
+                file_name="Batch Last",
+                file_size=0,
+                custom_id=custom_id
+            )
 
             first_id = state_data.get("first_id")
             last_id = extract_message_id(message)
@@ -403,15 +403,14 @@ async def unified_media_handler(client: Client, message: Message):
             
         return
 
-    if user_id != OWNER_ID:
-        return
-
-    file_id = media.file_id
-    file_name = getattr(media, "file_name", "Unknown File")
-    file_size = media.file_size
+    # Direct single file store for owner when not in interactive state
     custom_id = extract_message_id(message)
-    
-    inserted_id = await db.save_file(file_id, file_name, file_size, custom_id=custom_id)
+    inserted_id = await db.save_file(
+        file_id=message.id,
+        file_name="Direct Media",
+        file_size=0,
+        custom_id=custom_id
+    )
     encoded_payload = encode_id(str(inserted_id))
     bot_username = (await client.get_me()).username
     share_link = f"https://t.me/{bot_username}?start={encoded_payload}"
@@ -420,6 +419,104 @@ async def unified_media_handler(client: Client, message: Message):
         f"Here is your link:\n`{share_link}`",
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔗 SHARE URL", url=f"https://t.me/share/url?url={share_link}")]])
     )
+
+# Override start_handler file sender to support copying ANY message type (Photos, Videos, Text with buttons)
+async def send_stored_item(client, chat_id, file_db_id):
+    try:
+        # We copy the exact message sent by the owner from the owner's chat or source
+        # Since owner forwards or sends messages in chat, we can copy message directly using message id
+        sent_msg = await client.copy_message(
+            chat_id=chat_id,
+            from_chat_id=OWNER_ID,
+            message_id=int(file_db_id)
+        )
+        return sent_msg
+    except Exception as e:
+        logging.error(f"Error copying message {file_db_id}: {e}")
+        return None
+
+# Update start_handler logic to use send_stored_item for robust multi-format support
+@app.on_message(filters.command("start") & filters.private)
+async def start_handler(client: Client, message: Message):
+    user_id = message.from_user.id
+    await db.add_user(user_id)
+    
+    if user_id != OWNER_ID:
+        fs_check = await check_force_sub(client, user_id)
+        if fs_check is not True:
+            await message.reply_text(
+                "🔒 **Access Denied!**\n\n"
+                "You must join our channels below to use this bot and access files. After joining, click **'🔄 Try Again'**.",
+                reply_markup=fs_check
+            )
+            return
+
+    if len(message.command) > 1:
+        encoded_payload = message.command[1]
+        sent_messages = []
+        try:
+            decoded_payload = decode_id(encoded_payload)
+            
+            if "-" in decoded_payload:
+                start_str, end_str = decoded_payload.split("-")
+                start_id, end_id = int(start_str), int(end_str)
+                
+                wait_msg = await message.reply_text("⏳ **Please wait... Sending your batch files.**")
+                sent_messages.append(wait_msg.id)
+                
+                files_sent_count = 0
+                for file_db_id in range(start_id, end_id + 1):
+                    file_data = await db.get_file(file_db_id)
+                    if not file_data:
+                        file_data = await db.get_file(str(file_db_id))
+                        
+                    if file_data:
+                        files_sent_count += 1
+                        sent_msg = await send_stored_item(client, message.chat.id, file_data["_id"])
+                        if sent_msg:
+                            sent_messages.append(sent_msg.id)
+                        await asyncio.sleep(0.5)
+                
+                if files_sent_count == 0:
+                    err_msg = await message.reply_text("❌ No files found in this batch range!")
+                    sent_messages.append(err_msg.id)
+                else:
+                    mins_text = int(BOT_SETTINGS["auto_delete_time"] / 60)
+                    if BOT_SETTINGS["auto_delete_time"] > 0:
+                        warning_msg = await message.reply_text(f"⚠️ **Important:**\nAll messages will be deleted after {mins_text} minutes. Please save or forward these messages to your personal saved messages to avoid losing them!")
+                        sent_messages.append(warning_msg.id)
+            else:
+                file_data = await db.get_file(decoded_payload)
+                if not file_data:
+                    try:
+                        file_data = await db.get_file(int(decoded_payload))
+                    except:
+                        pass
+
+                if file_data:
+                    sent_msg = await send_stored_item(client, message.chat.id, file_data["_id"])
+                    if sent_msg:
+                        sent_messages.append(sent_msg.id)
+                else:
+                    err_msg = await message.reply_text("❌ File not found or deleted from database!")
+                    sent_messages.append(err_msg.id)
+            
+            if BOT_SETTINGS["auto_delete_time"] > 0 and sent_messages:
+                asyncio.create_task(schedule_message_deletion(client, message.chat.id, sent_messages, BOT_SETTINGS["auto_delete_time"]))
+                
+        except Exception as e:
+            logging.error(f"Error in start link handler: {e}")
+            await message.reply_text("❌ Invalid link or expired batch!")
+    else:
+        if user_id == OWNER_ID:
+            await message.reply_text(
+                "👋 Vanakkam da mapla!\n"
+                "Use `/genlink`, `/batch`, `/addfsub`, `/remfsub`, `/fsublist`, or `/stats`."
+            )
+        else:
+            await message.reply_text(
+                "👋 Welcome! Send or click file links provided by our channel to access content."
+            )
 
 async def main():
     await app.start()
@@ -439,5 +536,5 @@ async def main():
     await app.stop()
 
 if __name__ == "__main__":
-    print("🤖 Bot is starting cleanly...")
+    print("🤖 Bot is starting cleanlyy...")
     asyncio.get_event_loop().run_until_complete(main())
