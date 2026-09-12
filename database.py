@@ -62,7 +62,6 @@ class Database:
     async def get_all_users(self):
         return self.users_col.find({})
 
-    # Force Sub Database Methods
     async def get_fsub_channels(self):
         data = await self.settings_col.find_one({"_id": "fsub_channels"})
         return data.get("channels", []) if data else []
