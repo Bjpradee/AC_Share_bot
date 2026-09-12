@@ -33,23 +33,41 @@ async def start_handler(client: Client, message: Message):
     if len(message.command) > 1:
         encoded_payload = message.command[1]
         try:
-            file_db_id = decode_id(encoded_payload)
-            file_data = await db.get_file(file_db_id)
+            # Check if it's a batch link or single file link
+            decoded_payload = decode_id(encoded_payload)
             
-            if file_data:
-                await client.send_cached_media(
-                    chat_id=message.chat.id,
-                    file_id=file_data["file_id"],
-                    caption=f"📁 **{file_data['file_name']}**\n\n📥 Downloaded via @Anime_Control_Tamil Store Bot"
-                )
+            if "-" in decoded_payload:
+                # Batch link handling (e.g., start_id-end_id)
+                start_str, end_str = decoded_payload.split("-")
+                start_id, end_id = int(start_str), int(end_str)
+                
+                # Fetch and send files in range
+                for file_db_id in range(start_id, end_id + 1):
+                    file_data = await db.get_file(str(file_db_id))
+                    if file_data:
+                        await client.send_cached_media(
+                            chat_id=message.chat.id,
+                            file_id=file_data["file_id"],
+                            caption=f"📁 **{file_data['file_name']}**\n\n📥 Downloaded via @Anime_Control_Tamil Store Bot"
+                        )
+                        await asyncio.sleep(0.8) # Prevent flood wait
             else:
-                await message.reply_text("❌ File not found or deleted from database!")
+                # Single file link handling
+                file_data = await db.get_file(decoded_payload)
+                if file_data:
+                    await client.send_cached_media(
+                        chat_id=message.chat.id,
+                        file_id=file_data["file_id"],
+                        caption=f"📁 **{file_data['file_name']}**\n\n📥 Downloaded via @Anime_Control_Tamil Store Bot"
+                    )
+                else:
+                    await message.reply_text("❌ File not found or deleted from database!")
         except Exception as e:
-            await message.reply_text("❌ Invalid link!")
+            await message.reply_text("❌ Invalid link or expired batch!")
     else:
         await message.reply_text(
             "👋 Vanakkam da mapla!\n"
-            "Enna use panni files-ah store pannikalam. Oru file-ah forward pannu, illana `/genlink` use pannu!"
+            "Enna use panni files-ah store pannikalam. Oru file-ah forward pannu, illana `/genlink` / `/batch` use pannu!"
         )
 
 # /genlink command handler
@@ -81,10 +99,13 @@ async def genlink_handler(client: Client, message: Message):
         f"🔗 **Share Link:**\n`{share_link}`"
     )
 
-# /batch command placeholder
+# /batch command handler for multiple files
 @app.on_message(filters.command("batch") & filters.private)
 async def batch_handler(client: Client, message: Message):
-    await message.reply_text("⚙️ **Batch feature** inum konja nerathula complete-ah update panniralam da mapla!")
+    await message.reply_text(
+        "⚡ **Batch Link Creator**\n\n"
+        "Oru channel-la irunthu 2 messages-oda links-ah anuppu (First Post link & Last Post link) or use format: `first_id - last_id`"
+    )
 
 @app.on_message(filters.document | filters.video | filters.audio)
 async def store_file(client: Client, message: Message):
