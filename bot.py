@@ -56,7 +56,7 @@ async def schedule_message_deletion(client: Client, chat_id: int, message_ids: l
         except Exception:
             pass
 
-# 100% Crash-Proof Force Sub Checker
+# 100% Crash-Proof Force Sub Checker (with dynamic button hiding)
 async def check_force_sub(client: Client, user_id: int):
     channels = await db.get_fsub_channels()
     if not channels:
@@ -65,32 +65,37 @@ async def check_force_sub(client: Client, user_id: int):
     buttons = []
     is_participant = True
     
-    for channel in channels:
-        channel = channel.strip()
-        
-        # Ensure valid Telegram URL for the button to prevent silent crash
-        if channel.startswith("https://t.me/+"):
-            chat_id_or_link = channel
-            fallback_link = channel
-        else:
-            chat_id_or_link = channel if channel.startswith("@") or channel.startswith("-") else f"@{channel}"
-            fallback_link = f"https://t.me/{chat_id_or_link.replace('@', '')}"
-            
+    for channel_id in channels:
         try:
-            chat = await client.get_chat(chat_id_or_link)
-            actual_link = chat.invite_link or fallback_link
-            
-            member = await client.get_chat_member(chat.id, user_id)
-            if member.status in [ChatMemberStatus.LEFT, ChatMemberStatus.KICKED, ChatMemberStatus.RESTRICTED]:
+            # Convert string ID to int if it's a numeric ID (-100...)
+            try:
+                chat_id = int(channel_id)
+            except ValueError:
+                chat_id = channel_id
+                
+            try:
+                member = await client.get_chat_member(chat_id, user_id)
+                # If user left or kicked, they need to join
+                if member.status in [ChatMemberStatus.LEFT, ChatMemberStatus.KICKED, ChatMemberStatus.RESTRICTED]:
+                    is_participant = False
+                    chat = await client.get_chat(chat_id)
+                    link = chat.invite_link or f"https://t.me/{chat.username}" if chat.username else None
+                    if not link:
+                        link = await client.export_chat_invite_link(chat_id)
+                    buttons.append([InlineKeyboardButton(f"📢 Join {chat.title}", url=link)])
+            except UserNotParticipant:
+                # User has not joined yet
                 is_participant = False
-                buttons.append([InlineKeyboardButton(f"📢 Join {chat.title}", url=actual_link)])
-        except UserNotParticipant:
-            is_participant = False
-            buttons.append([InlineKeyboardButton(f"📢 Join Channel", url=fallback_link)])
+                chat = await client.get_chat(chat_id)
+                link = chat.invite_link or f"https://t.me/{chat.username}" if chat.username else None
+                if not link:
+                    link = await client.export_chat_invite_link(chat_id)
+                buttons.append([InlineKeyboardButton(f"📢 Join {chat.title}", url=link)])
+                
         except Exception as e:
+            logging.error(f"FSub check error for {channel_id}: {e}")
             is_participant = False
-            # Ultimate fallback to ensure button ALWAYS has a valid link
-            buttons.append([InlineKeyboardButton(f"📢 Join Channel", url=fallback_link if fallback_link.startswith("http") else "https://t.me/telegram")])
+            buttons.append([InlineKeyboardButton(f"📢 Join Channel", url="https://t.me/telegram")])
             
     if not is_participant:
         buttons.append([InlineKeyboardButton("🔄 Try Again", callback_data="check_fs")])
@@ -142,7 +147,6 @@ async def start_handler(client: Client, message: Message):
                 files_sent_count = 0
                 for msg_id in range(start_id, end_id + 1):
                     try:
-                        # Copy message keeps caption, empty InlineKeyboardMarkup removes the old "DOWNLOAD" button
                         sent_msg = await client.copy_message(
                             chat_id=message.chat.id,
                             from_chat_id=src_chat_id,
@@ -180,7 +184,6 @@ async def start_handler(client: Client, message: Message):
                     if "_" in composite_id:
                         src_chat_id, src_msg_id = composite_id.split("_")
                         try:
-                            # Copy message keeps caption, removes old button
                             sent_msg = await client.copy_message(
                                 chat_id=message.chat.id,
                                 from_chat_id=int(src_chat_id),
@@ -233,6 +236,8 @@ async def check_fs_callback(client: Client, callback_query: CallbackQuery):
         await callback_query.message.delete()
         await callback_query.message.reply_text("✅ Thank you for joining! Now you can access your files. Click your file link again.")
     else:
+        # Dynamic update of buttons happens here! It will redraw the keyboard minus the joined channels.
+        await callback_query.message.edit_reply_markup(reply_markup=fs_check)
         await callback_query.answer("❌ You haven't joined all required channels yet!", show_alert=True)
 
 @app.on_message(filters.command("settings") & filters.private)
@@ -265,9 +270,7 @@ async def set_time_callback(client: Client, callback_query: CallbackQuery):
         return
     seconds = int(callback_query.data.split("_")[2])
     
-    # Save to MongoDB
     await set_auto_delete_time(seconds)
-    
     mins_text = f"{int(seconds / 60)} minutes" if seconds > 0 else "Disabled"
     
     await callback_query.message.edit_text(
@@ -286,36 +289,56 @@ async def stats_handler(client: Client, message: Message):
     channels = await db.get_fsub_channels()
     await message.reply_text(f"📊 **Bot Statistics**\n\n👥 Total Users: `{count}`\n📢 Active FSub Channels: `{len(channels)}`")
 
+@app.on_message(filters.command("clearfsub") & filters.private)
+async def clear_fsub_handler(client: Client, message: Message):
+    if message.from_user.id != OWNER_ID:
+        return
+    await db.set_fsub_channels([])
+    await message.reply_text("🧹 **All Force Sub channels have been completely cleared from the database!**\n\nYou can now add them properly using `/addfsub @username` or `/addfsub -100XXXXXXX`.")
+
 @app.on_message(filters.command("addfsub") & filters.private)
 async def add_fsub_handler(client: Client, message: Message):
     if message.from_user.id != OWNER_ID:
         return
     if len(message.command) < 2:
-        await message.reply_text("❌ Usage:\n• `/addfsub @channelname`\n• `/addfsub https://t.me/+invite_hash`")
+        await message.reply_text("❌ Usage:\n• `/addfsub @channelname` (Public)\n• `/addfsub -1001234567890` (Private IDs)")
         return
     
-    new_channel = message.text.split(None, 1)[1].strip()
-    if not new_channel.startswith("https://t.me/+") and not new_channel.startswith("@") and not new_channel.startswith("-"):
-        new_channel = f"@{new_channel}"
+    target = message.text.split(None, 1)[1].strip()
+    
+    if "t.me" in target or "+" in target:
+        await message.reply_text("❌ **ERROR:** Do not use invite links!\n\nFor private channels, you must use the `-100` ID. Please add the bot to the channel as Admin first, get its ID, and add it like `/addfsub -10012345678`.")
+        return
+
+    if not target.startswith("-100") and not target.startswith("@"):
+        target = f"@{target}"
         
+    try:
+        # Validate that the bot can actually fetch this channel (must be admin or public)
+        chat = await client.get_chat(target)
+        target_id = str(chat.id)
+    except Exception as e:
+        await message.reply_text(f"❌ Cannot access channel!\n\nMake sure the bot is an **Admin** in `{target}` first.\nError Details: `{e}`")
+        return
+
     channels = await db.get_fsub_channels()
     if len(channels) >= 4:
         await message.reply_text("❌ Maximum 4 Force Sub channels are allowed!")
         return
-    if new_channel in channels:
+    if target_id in channels:
         await message.reply_text("⚠️ This channel is already in Force Sub list!")
         return
         
-    channels.append(new_channel)
+    channels.append(target_id)
     await db.set_fsub_channels(channels)
-    await message.reply_text(f"✅ Successfully added `{new_channel}` to Force Sub channels!")
+    await message.reply_text(f"✅ Successfully added `{chat.title}` to Force Sub channels!")
 
 @app.on_message(filters.command("remfsub") & filters.private)
 async def rem_fsub_handler(client: Client, message: Message):
     if message.from_user.id != OWNER_ID:
         return
     if len(message.command) < 2:
-        await message.reply_text("❌ Usage: `/remfsub @channelname` or invite link")
+        await message.reply_text("❌ Usage: `/remfsub channel_id_or_username` (Check /fsublist to copy the exact ID)")
         return
         
     target = message.text.split(None, 1)[1].strip()
@@ -332,7 +355,19 @@ async def rem_fsub_handler(client: Client, message: Message):
         await db.set_fsub_channels(channels)
         await message.reply_text(f"✅ Removed `{matched}` from Force Sub list!")
     else:
-        await message.reply_text("❌ Channel/Link not found in Force Sub list!")
+        # Fallback resolve attempt
+        try:
+            if not target.startswith("-") and not target.startswith("@"):
+                target = f"@{target}"
+            chat = await client.get_chat(target)
+            if str(chat.id) in channels:
+                channels.remove(str(chat.id))
+                await db.set_fsub_channels(channels)
+                await message.reply_text(f"✅ Removed `{chat.title}` from Force Sub list!")
+                return
+        except:
+            pass
+        await message.reply_text("❌ Channel not found in Force Sub list! Check `/fsublist`.")
 
 @app.on_message(filters.command("fsublist") & filters.private)
 async def fsub_list_handler(client: Client, message: Message):
@@ -344,8 +379,12 @@ async def fsub_list_handler(client: Client, message: Message):
         return
     
     text = "📢 **Current Force Sub Channels:**\n\n"
-    for idx, ch in enumerate(channels, 1):
-        text += f"{idx}. `{ch}`\n"
+    for idx, ch_id in enumerate(channels, 1):
+        try:
+            chat = await client.get_chat(int(ch_id) if ch_id.lstrip('-').isdigit() else ch_id)
+            text += f"{idx}. {chat.title} (`{ch_id}`)\n"
+        except:
+            text += f"{idx}. Unknown Channel (`{ch_id}`)\n"
     await message.reply_text(text)
 
 @app.on_message(filters.command("broadcast") & filters.private)
@@ -383,7 +422,7 @@ async def batch_prompt(client: Client, message: Message):
     await message.reply_text("Forward The Batch **First Message** From Your Batch Channel (With Forward Tag)")
 
 # Unified Media Handler
-@app.on_message(filters.private & ~filters.command(["addfsub", "remfsub", "fsublist", "genlink", "batch", "settings", "stats", "start", "broadcast"]))
+@app.on_message(filters.private & ~filters.command(["addfsub", "remfsub", "fsublist", "genlink", "batch", "settings", "stats", "start", "broadcast", "clearfsub"]))
 async def unified_media_handler(client: Client, message: Message):
     user_id = message.from_user.id
     
@@ -397,7 +436,6 @@ async def unified_media_handler(client: Client, message: Message):
         current_state = state_data.get("state")
 
         if current_state == "waiting_genlink":
-            # For SINGLE FILES: Save the message from the current DM chat to guarantee it copies!
             src_chat_id = message.chat.id
             src_msg_id = message.id
             
@@ -421,7 +459,6 @@ async def unified_media_handler(client: Client, message: Message):
             return
 
         elif current_state == "waiting_batch_first":
-            # For BATCH FILES: We MUST use the source channel ID to fetch the range of files
             src_chat_id = message.forward_from_chat.id if message.forward_from_chat else message.chat.id
             src_msg_id = message.forward_from_message_id if message.forward_from_message_id else message.id
             
@@ -487,7 +524,8 @@ async def main():
         BotCommand("stats", "View bot statistics"),
         BotCommand("addfsub", "Add channel to force sub"),
         BotCommand("remfsub", "Remove channel from force sub"),
-        BotCommand("fsublist", "View active force sub channels")
+        BotCommand("fsublist", "View active force sub channels"),
+        BotCommand("clearfsub", "Wipe all buggy channels")
     ]
     await app.set_bot_commands(commands)
     print("🔥 Bot Commands Menu set successfully & Bot is running!")
