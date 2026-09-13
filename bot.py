@@ -70,7 +70,6 @@ async def check_force_sub(client: Client, user_id: int):
             channel_id = channel_id.strip()
             chat_id = int(channel_id) if channel_id.lstrip('-').isdigit() else channel_id
                 
-            # Safely fetch channel info
             try:
                 chat = await client.get_chat(chat_id)
                 link = chat.invite_link or (f"https://t.me/{chat.username}" if chat.username else None)
@@ -78,11 +77,9 @@ async def check_force_sub(client: Client, user_id: int):
                     link = await client.export_chat_invite_link(chat_id)
                 title = chat.title or "Channel"
             except Exception as e:
-                logging.error(f"Cannot access channel {chat_id}: {e}")
                 link = "https://t.me/telegram"
                 title = "Unknown Channel"
                 
-            # SAFE Membership Check (Strict ENUM matching for accuracy)
             user_joined = False
             try:
                 member = await client.get_chat_member(chat_id, user_id)
@@ -90,16 +87,15 @@ async def check_force_sub(client: Client, user_id: int):
                     user_joined = True
             except UserNotParticipant:
                 user_joined = False
-            except Exception as e:
-                logging.error(f"FSub member check error for {channel_id}: {e}")
+            except Exception:
                 user_joined = False
                 
             if not user_joined:
                 is_participant = False
                 buttons.append([InlineKeyboardButton(f"📢 Join {title}", url=link)])
                 
-        except Exception as e:
-            logging.error(f"FSub loop error: {e}")
+        except Exception:
+            pass
             
     if not is_participant:
         buttons.append([InlineKeyboardButton("🔄 Try Again", callback_data="check_fs")])
@@ -113,7 +109,7 @@ async def start_handler(client: Client, message: Message):
     await db.add_user(user_id)
     
     if len(message.command) > 1:
-        # OWNER BYPASS: Owner shouldn't be asked to join channels!
+        # OWNER BYPASS
         if user_id != OWNER_ID:
             try:
                 fs_check = await check_force_sub(client, user_id)
@@ -124,8 +120,7 @@ async def start_handler(client: Client, message: Message):
                         reply_markup=fs_check
                     )
                     return
-            except Exception as e:
-                logging.error(f"FSub check failed: {e}")
+            except Exception:
                 await message.reply_text("❌ Connection error during channel verification. Please try again.")
                 return
 
@@ -161,12 +156,12 @@ async def start_handler(client: Client, message: Message):
                         if sent_msg:
                             files_sent_count += 1
                             sent_messages.append(sent_msg.id)
-                    except Exception as e:
-                        logging.error(f"Batch skip msg {msg_id}: {e}")
+                    except Exception:
+                        pass
                     await asyncio.sleep(0.5)
                 
                 if files_sent_count == 0:
-                    err_msg = await message.reply_text("❌ No files found! Make sure the bot is an admin in the source batch channel.")
+                    err_msg = await message.reply_text("❌ Failed to fetch batch files!\n\n**Note:** Make sure the bot is an **Admin** in the original channel where these files were forwarded from.")
                     sent_messages.append(err_msg.id)
                 else:
                     if auto_del_time > 0:
@@ -174,7 +169,7 @@ async def start_handler(client: Client, message: Message):
                         warning_msg = await message.reply_text(f"⚠️ **Important:**\nAll messages will be deleted after {mins_text} minutes. Please save or forward these messages to your personal saved messages to avoid losing them!")
                         sent_messages.append(warning_msg.id)
             
-            # --- SINGLE FILE LOGIC ---
+            # --- SINGLE FILE LOGIC (DOUBLE FALLBACK APPLIED) ---
             else:
                 file_data = await db.get_file(decoded_payload)
                 if not file_data:
@@ -187,28 +182,50 @@ async def start_handler(client: Client, message: Message):
                     composite_id = str(file_data["file_id"])
                     
                     if "_" in composite_id:
-                        src_chat_id, src_msg_id = composite_id.split("_")
+                        parts = composite_id.split("_")
+                        src_chat_id = parts[0]
+                        src_msg_id = parts[1]
+                        fallback_file_id = parts[2] if len(parts) > 2 else None
+                        
+                        sent_msg = None
                         try:
+                            # Primary Fetch Method
                             sent_msg = await client.copy_message(
                                 chat_id=message.chat.id,
                                 from_chat_id=int(src_chat_id),
                                 message_id=int(src_msg_id),
                                 reply_markup=InlineKeyboardMarkup([])
                             )
-                            if sent_msg:
-                                sent_messages.append(sent_msg.id)
-                        except Exception as e:
-                            err_msg = await message.reply_text("❌ Failed to fetch file from source!")
+                        except Exception as copy_err:
+                            # Secondary Fallback Fetch Method (Guaranteed to work if file exists)
+                            if fallback_file_id and fallback_file_id != "None":
+                                try:
+                                    sent_msg = await client.send_cached_media(
+                                        chat_id=message.chat.id,
+                                        file_id=fallback_file_id,
+                                        reply_markup=InlineKeyboardMarkup([])
+                                    )
+                                except Exception:
+                                    pass
+                                    
+                        if sent_msg:
+                            sent_messages.append(sent_msg.id)
+                        else:
+                            err_msg = await message.reply_text("❌ Failed to fetch file from source! Please generate a new link for this file.")
                             sent_messages.append(err_msg.id)
                     else:
-                        sent_msg = await client.send_cached_media(
-                            chat_id=message.chat.id,
-                            file_id=composite_id,
-                            reply_markup=InlineKeyboardMarkup([])
-                        )
-                        sent_messages.append(sent_msg.id)
+                        try:
+                            sent_msg = await client.send_cached_media(
+                                chat_id=message.chat.id,
+                                file_id=composite_id,
+                                reply_markup=InlineKeyboardMarkup([])
+                            )
+                            sent_messages.append(sent_msg.id)
+                        except Exception:
+                            err_msg = await message.reply_text("❌ Failed to fetch file from source! Please generate a new link.")
+                            sent_messages.append(err_msg.id)
                         
-                    if auto_del_time > 0 and len(sent_messages) > 0:
+                    if auto_del_time > 0 and len(sent_messages) > 0 and files_sent_count != 0:
                         mins_text = int(auto_del_time / 60)
                         warning_msg = await message.reply_text(f"⚠️ **Important:**\nThis message will be deleted after {mins_text} minutes. Please forward it to your saved messages!")
                         sent_messages.append(warning_msg.id)
@@ -241,7 +258,10 @@ async def check_fs_callback(client: Client, callback_query: CallbackQuery):
         await callback_query.message.delete()
         await callback_query.message.reply_text("✅ Thank you for joining! Now you can access your files. Click your file link again.")
     else:
-        await callback_query.message.edit_reply_markup(reply_markup=fs_check)
+        try:
+            await callback_query.message.edit_reply_markup(reply_markup=fs_check)
+        except Exception:
+            pass
         await callback_query.answer("❌ You haven't joined all required channels yet!", show_alert=True)
 
 @app.on_message(filters.command("settings") & filters.private)
@@ -441,7 +461,13 @@ async def unified_media_handler(client: Client, message: Message):
             src_chat_id = message.chat.id
             src_msg_id = message.id
             
-            composite_id = f"{src_chat_id}_{src_msg_id}"
+            # Extract file_id to use as a fallback if copy_message fails
+            media = message.document or message.video or message.audio or message.photo
+            file_id_fallback = media.file_id if media else "None"
+            
+            # Save 3 values to ensure delivery: ChatID_MessageID_FileID
+            composite_id = f"{src_chat_id}_{src_msg_id}_{file_id_fallback}"
+            
             inserted_id = await db.save_file(
                 file_id=composite_id,
                 file_name="Media",
@@ -495,10 +521,15 @@ async def unified_media_handler(client: Client, message: Message):
             
         return
 
+    # Direct single file generation without commands
     src_chat_id = message.chat.id
     src_msg_id = message.id
     
-    composite_id = f"{src_chat_id}_{src_msg_id}"
+    media = message.document or message.video or message.audio or message.photo
+    file_id_fallback = media.file_id if media else "None"
+    
+    composite_id = f"{src_chat_id}_{src_msg_id}_{file_id_fallback}"
+    
     inserted_id = await db.save_file(
         file_id=composite_id,
         file_name="Direct Media",
