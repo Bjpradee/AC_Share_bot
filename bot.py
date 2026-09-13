@@ -56,7 +56,7 @@ async def schedule_message_deletion(client: Client, chat_id: int, message_ids: l
         except Exception:
             pass
 
-# Robust Force Sub Checker (Strict for EVERYONE)
+# 100% Crash-Proof Force Sub Checker
 async def check_force_sub(client: Client, user_id: int):
     channels = await db.get_fsub_channels()
     if not channels:
@@ -67,37 +67,30 @@ async def check_force_sub(client: Client, user_id: int):
     
     for channel in channels:
         channel = channel.strip()
-        chat_id = channel
         
+        # Ensure valid Telegram URL for the button to prevent silent crash
+        if channel.startswith("https://t.me/+"):
+            chat_id_or_link = channel
+            fallback_link = channel
+        else:
+            chat_id_or_link = channel if channel.startswith("@") or channel.startswith("-") else f"@{channel}"
+            fallback_link = f"https://t.me/{chat_id_or_link.replace('@', '')}"
+            
         try:
-            if channel.startswith("https://t.me/+"):
-                chat = await client.get_chat(channel)
-                chat_id = chat.id
-            elif channel.startswith("@") or not channel.startswith("-"):
-                if not channel.startswith("@"):
-                    channel = f"@{channel}"
-                chat_id = channel
-                
-            member = await client.get_chat_member(chat_id, user_id)
+            chat = await client.get_chat(chat_id_or_link)
+            actual_link = chat.invite_link or fallback_link
+            
+            member = await client.get_chat_member(chat.id, user_id)
             if member.status in [ChatMemberStatus.LEFT, ChatMemberStatus.KICKED, ChatMemberStatus.RESTRICTED]:
                 is_participant = False
-                try:
-                    chat_info = await client.get_chat(chat_id)
-                    link = chat_info.invite_link or (f"https://t.me/{chat_info.username}" if chat_info.username else channel)
-                    buttons.append([InlineKeyboardButton(f"📢 Join {chat_info.title}", url=link)])
-                except:
-                    buttons.append([InlineKeyboardButton(f"📢 Join Channel", url=channel)])
+                buttons.append([InlineKeyboardButton(f"📢 Join {chat.title}", url=actual_link)])
         except UserNotParticipant:
             is_participant = False
-            try:
-                chat_info = await client.get_chat(chat_id)
-                link = chat_info.invite_link or (f"https://t.me/{chat_info.username}" if chat_info.username else channel)
-                buttons.append([InlineKeyboardButton(f"📢 Join {chat_info.title}", url=link)])
-            except:
-                buttons.append([InlineKeyboardButton(f"📢 Join Channel", url=channel)])
+            buttons.append([InlineKeyboardButton(f"📢 Join Channel", url=fallback_link)])
         except Exception as e:
             is_participant = False
-            buttons.append([InlineKeyboardButton(f"📢 Join Channel", url=channel)])
+            # Ultimate fallback to ensure button ALWAYS has a valid link
+            buttons.append([InlineKeyboardButton(f"📢 Join Channel", url=fallback_link if fallback_link.startswith("http") else "https://t.me/telegram")])
             
     if not is_participant:
         buttons.append([InlineKeyboardButton("🔄 Try Again", callback_data="check_fs")])
@@ -111,14 +104,19 @@ async def start_handler(client: Client, message: Message):
     await db.add_user(user_id)
     
     if len(message.command) > 1:
-        # FS CHECK FOR ALL USERS
-        fs_check = await check_force_sub(client, user_id)
-        if fs_check is not True:
-            await message.reply_text(
-                "🔒 **Access Denied!**\n\n"
-                "You must join our channels below to use this bot and access files. After joining, click **'🔄 Try Again'**.",
-                reply_markup=fs_check
-            )
+        # Check Force Sub for EVERYONE safely
+        try:
+            fs_check = await check_force_sub(client, user_id)
+            if fs_check is not True:
+                await message.reply_text(
+                    "🔒 **Access Denied!**\n\n"
+                    "You must join our channels below to use this bot and access files. After joining, click **'🔄 Try Again'**.",
+                    reply_markup=fs_check
+                )
+                return
+        except Exception as e:
+            logging.error(f"FSub check failed: {e}")
+            await message.reply_text("❌ Connection error during channel verification. Please try again.")
             return
 
         encoded_payload = message.command[1]
@@ -130,9 +128,13 @@ async def start_handler(client: Client, message: Message):
             
             # --- BATCH FILES LOGIC ---
             if decoded_payload.startswith("batch_"):
-                _, src_chat_id_str, start_str, end_str = decoded_payload.split("_")
-                src_chat_id = int(src_chat_id_str)
-                start_id, end_id = int(start_str), int(end_str)
+                parts = decoded_payload.split("_")
+                if len(parts) != 4:
+                    raise ValueError("Invalid batch payload")
+                    
+                src_chat_id = int(parts[1])
+                start_id = int(parts[2])
+                end_id = int(parts[3])
                 
                 wait_msg = await message.reply_text("⏳ **Please wait... Sending your batch files.**")
                 sent_messages.append(wait_msg.id)
@@ -140,7 +142,7 @@ async def start_handler(client: Client, message: Message):
                 files_sent_count = 0
                 for msg_id in range(start_id, end_id + 1):
                     try:
-                        # Empty InlineKeyboardMarkup removes old buttons but keeps caption!
+                        # Copy message keeps caption, empty InlineKeyboardMarkup removes the old "DOWNLOAD" button
                         sent_msg = await client.copy_message(
                             chat_id=message.chat.id,
                             from_chat_id=src_chat_id,
@@ -151,7 +153,7 @@ async def start_handler(client: Client, message: Message):
                             files_sent_count += 1
                             sent_messages.append(sent_msg.id)
                     except Exception as e:
-                        pass
+                        logging.error(f"Batch skip msg {msg_id}: {e}")
                     await asyncio.sleep(0.5)
                 
                 if files_sent_count == 0:
@@ -178,7 +180,7 @@ async def start_handler(client: Client, message: Message):
                     if "_" in composite_id:
                         src_chat_id, src_msg_id = composite_id.split("_")
                         try:
-                            # Empty InlineKeyboardMarkup removes old buttons but keeps caption!
+                            # Copy message keeps caption, removes old button
                             sent_msg = await client.copy_message(
                                 chat_id=message.chat.id,
                                 from_chat_id=int(src_chat_id),
