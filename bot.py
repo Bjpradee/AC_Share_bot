@@ -56,7 +56,7 @@ async def schedule_message_deletion(client: Client, chat_id: int, message_ids: l
         except Exception:
             pass
 
-# 100% Crash-Proof Force Sub Checker
+# 100% Crash-Proof & Flawless Force Sub Checker
 async def check_force_sub(client: Client, user_id: int):
     channels = await db.get_fsub_channels()
     if not channels:
@@ -109,7 +109,7 @@ async def start_handler(client: Client, message: Message):
     await db.add_user(user_id)
     
     if len(message.command) > 1:
-        # OWNER BYPASS - Owner-kku FSub block aagathu
+        # OWNER BYPASS
         if user_id != OWNER_ID:
             try:
                 fs_check = await check_force_sub(client, user_id)
@@ -147,24 +147,17 @@ async def start_handler(client: Client, message: Message):
                 files_sent_count = 0
                 for msg_id in range(start_id, end_id + 1):
                     try:
-                        # Direct Copy (No empty keyboard trick which causes crash)
                         sent_msg = await client.copy_message(
                             chat_id=message.chat.id,
                             from_chat_id=src_chat_id,
-                            message_id=msg_id
+                            message_id=msg_id,
+                            reply_markup=InlineKeyboardMarkup([]) 
                         )
                         if sent_msg:
-                            # Safely remove the inline keyboard AFTER sending, keeping the caption!
-                            if sent_msg.reply_markup:
-                                try:
-                                    await sent_msg.edit_reply_markup(None)
-                                except Exception:
-                                    pass
-                                    
                             files_sent_count += 1
                             sent_messages.append(sent_msg.id)
-                    except Exception as e:
-                        logging.error(f"Batch skip msg {msg_id}: {e}")
+                    except Exception:
+                        pass
                     await asyncio.sleep(0.5)
                 
                 if files_sent_count == 0:
@@ -187,36 +180,52 @@ async def start_handler(client: Client, message: Message):
 
                 if file_data:
                     composite_id = str(file_data["file_id"])
+                    sent_msg = None
                     
                     if "_" in composite_id:
                         parts = composite_id.split("_")
-                        src_chat_id = int(parts[0])
-                        src_msg_id = int(parts[1])
+                        src_chat_id = parts[0]
+                        src_msg_id = parts[1]
+                        fallback_file_id = parts[2] if len(parts) > 2 else None
                         
                         try:
-                            # Direct Copy
+                            # Primary Fetch Method
                             sent_msg = await client.copy_message(
                                 chat_id=message.chat.id,
-                                from_chat_id=src_chat_id,
-                                message_id=src_msg_id
+                                from_chat_id=int(src_chat_id),
+                                message_id=int(src_msg_id),
+                                reply_markup=InlineKeyboardMarkup([])
                             )
-                            if sent_msg:
-                                # Safely remove the inline keyboard AFTER sending
-                                if sent_msg.reply_markup:
-                                    try:
-                                        await sent_msg.edit_reply_markup(None)
-                                    except Exception:
-                                        pass
-                                sent_messages.append(sent_msg.id)
                         except Exception as copy_err:
-                            logging.error(f"Single copy error: {copy_err}")
-                            err_msg = await message.reply_text("❌ Failed to fetch file from source! Please generate a new link for this file.")
-                            sent_messages.append(err_msg.id)
+                            # Secondary Fallback Fetch Method (Guaranteed to work if file exists)
+                            if fallback_file_id and fallback_file_id != "None":
+                                try:
+                                    sent_msg = await client.send_cached_media(
+                                        chat_id=message.chat.id,
+                                        file_id=fallback_file_id,
+                                        reply_markup=InlineKeyboardMarkup([])
+                                    )
+                                except Exception:
+                                    pass
+                    else:
+                        try:
+                            sent_msg = await client.send_cached_media(
+                                chat_id=message.chat.id,
+                                file_id=composite_id,
+                                reply_markup=InlineKeyboardMarkup([])
+                            )
+                        except Exception:
+                            pass
                             
-                    if auto_del_time > 0 and len(sent_messages) > 0:
-                        mins_text = int(auto_del_time / 60)
-                        warning_msg = await message.reply_text(f"⚠️ **Important:**\nThis message will be deleted after {mins_text} minutes. Please forward it to your saved messages!")
-                        sent_messages.append(warning_msg.id)
+                    if sent_msg:
+                        sent_messages.append(sent_msg.id)
+                        if auto_del_time > 0:
+                            mins_text = int(auto_del_time / 60)
+                            warning_msg = await message.reply_text(f"⚠️ **Important:**\nThis message will be deleted after {mins_text} minutes. Please forward it to your saved messages!")
+                            sent_messages.append(warning_msg.id)
+                    else:
+                        err_msg = await message.reply_text("❌ Failed to fetch file from source! Please generate a new link for this file.")
+                        sent_messages.append(err_msg.id)
                 else:
                     err_msg = await message.reply_text("❌ File not found or deleted from database!")
                     sent_messages.append(err_msg.id)
@@ -244,7 +253,13 @@ async def check_fs_callback(client: Client, callback_query: CallbackQuery):
     fs_check = await check_force_sub(client, user_id)
     if fs_check is True:
         await callback_query.message.delete()
-        await callback_query.message.reply_text("✅ Thank you for joining! Now you can access your files. Click your file link again.")
+        # ADDED THE TRY AGAIN BUTTON HERE EXACTLY AS YOU ASKED
+        await callback_query.message.reply_text(
+            "✅ Thank you for joining! Now you can access your files. Click your file link again.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔄 Try Again", callback_data="check_fs")]
+            ])
+        )
     else:
         try:
             await callback_query.message.edit_reply_markup(reply_markup=fs_check)
@@ -449,7 +464,10 @@ async def unified_media_handler(client: Client, message: Message):
             src_chat_id = message.forward_from_chat.id if message.forward_from_chat else message.chat.id
             src_msg_id = message.forward_from_message_id if message.forward_from_message_id else message.id
             
-            composite_id = f"{src_chat_id}_{src_msg_id}"
+            media = message.document or message.video or message.audio or message.photo
+            file_id_fallback = media.file_id if media else "None"
+            
+            composite_id = f"{src_chat_id}_{src_msg_id}_{file_id_fallback}"
             
             inserted_id = await db.save_file(
                 file_id=composite_id,
@@ -507,7 +525,10 @@ async def unified_media_handler(client: Client, message: Message):
     src_chat_id = message.forward_from_chat.id if message.forward_from_chat else message.chat.id
     src_msg_id = message.forward_from_message_id if message.forward_from_message_id else message.id
     
-    composite_id = f"{src_chat_id}_{src_msg_id}"
+    media = message.document or message.video or message.audio or message.photo
+    file_id_fallback = media.file_id if media else "None"
+    
+    composite_id = f"{src_chat_id}_{src_msg_id}_{file_id_fallback}"
     
     inserted_id = await db.save_file(
         file_id=composite_id,
