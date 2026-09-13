@@ -169,7 +169,7 @@ async def start_handler(client: Client, message: Message):
                         warning_msg = await message.reply_text(f"⚠️ **Important:**\nAll messages will be deleted after {mins_text} minutes. Please save or forward these messages to your personal saved messages to avoid losing them!")
                         sent_messages.append(warning_msg.id)
             
-            # --- SINGLE FILE LOGIC (DOUBLE FALLBACK APPLIED) ---
+            # --- SINGLE FILE LOGIC ---
             else:
                 file_data = await db.get_file(decoded_payload)
                 if not file_data:
@@ -180,6 +180,7 @@ async def start_handler(client: Client, message: Message):
 
                 if file_data:
                     composite_id = str(file_data["file_id"])
+                    sent_msg = None
                     
                     if "_" in composite_id:
                         parts = composite_id.split("_")
@@ -187,7 +188,6 @@ async def start_handler(client: Client, message: Message):
                         src_msg_id = parts[1]
                         fallback_file_id = parts[2] if len(parts) > 2 else None
                         
-                        sent_msg = None
                         try:
                             # Primary Fetch Method
                             sent_msg = await client.copy_message(
@@ -207,12 +207,6 @@ async def start_handler(client: Client, message: Message):
                                     )
                                 except Exception:
                                     pass
-                                    
-                        if sent_msg:
-                            sent_messages.append(sent_msg.id)
-                        else:
-                            err_msg = await message.reply_text("❌ Failed to fetch file from source! Please generate a new link for this file.")
-                            sent_messages.append(err_msg.id)
                     else:
                         try:
                             sent_msg = await client.send_cached_media(
@@ -220,15 +214,19 @@ async def start_handler(client: Client, message: Message):
                                 file_id=composite_id,
                                 reply_markup=InlineKeyboardMarkup([])
                             )
-                            sent_messages.append(sent_msg.id)
                         except Exception:
-                            err_msg = await message.reply_text("❌ Failed to fetch file from source! Please generate a new link.")
-                            sent_messages.append(err_msg.id)
-                        
-                    if auto_del_time > 0 and len(sent_messages) > 0 and files_sent_count != 0:
-                        mins_text = int(auto_del_time / 60)
-                        warning_msg = await message.reply_text(f"⚠️ **Important:**\nThis message will be deleted after {mins_text} minutes. Please forward it to your saved messages!")
-                        sent_messages.append(warning_msg.id)
+                            pass
+                            
+                    if sent_msg:
+                        sent_messages.append(sent_msg.id)
+                        # ONLY SHOW WARNING IF FILE WAS ACTUALLY SENT (FIXED CRASH HERE)
+                        if auto_del_time > 0:
+                            mins_text = int(auto_del_time / 60)
+                            warning_msg = await message.reply_text(f"⚠️ **Important:**\nThis message will be deleted after {mins_text} minutes. Please forward it to your saved messages!")
+                            sent_messages.append(warning_msg.id)
+                    else:
+                        err_msg = await message.reply_text("❌ Failed to fetch file from source! Please generate a new link for this file.")
+                        sent_messages.append(err_msg.id)
                 else:
                     err_msg = await message.reply_text("❌ File not found or deleted from database!")
                     sent_messages.append(err_msg.id)
@@ -458,14 +456,13 @@ async def unified_media_handler(client: Client, message: Message):
         current_state = state_data.get("state")
 
         if current_state == "waiting_genlink":
-            src_chat_id = message.chat.id
-            src_msg_id = message.id
+            # ALWAYS use original source channel ID if forwarded (More robust)
+            src_chat_id = message.forward_from_chat.id if message.forward_from_chat else message.chat.id
+            src_msg_id = message.forward_from_message_id if message.forward_from_message_id else message.id
             
-            # Extract file_id to use as a fallback if copy_message fails
             media = message.document or message.video or message.audio or message.photo
             file_id_fallback = media.file_id if media else "None"
             
-            # Save 3 values to ensure delivery: ChatID_MessageID_FileID
             composite_id = f"{src_chat_id}_{src_msg_id}_{file_id_fallback}"
             
             inserted_id = await db.save_file(
@@ -521,9 +518,8 @@ async def unified_media_handler(client: Client, message: Message):
             
         return
 
-    # Direct single file generation without commands
-    src_chat_id = message.chat.id
-    src_msg_id = message.id
+    src_chat_id = message.forward_from_chat.id if message.forward_from_chat else message.chat.id
+    src_msg_id = message.forward_from_message_id if message.forward_from_message_id else message.id
     
     media = message.document or message.video or message.audio or message.photo
     file_id_fallback = media.file_id if media else "None"
