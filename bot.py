@@ -169,7 +169,7 @@ async def start_handler(client: Client, message: Message):
                         warning_msg = await message.reply_text(f"⚠️ **Important:**\nAll messages will be deleted after {mins_text} minutes. Please save or forward these messages to your personal saved messages to avoid losing them!")
                         sent_messages.append(warning_msg.id)
             
-            # --- SINGLE FILE LOGIC ---
+            # --- SINGLE FILE LOGIC (WITH DOUBLE FALLBACK RESTORED) ---
             else:
                 file_data = await db.get_file(decoded_payload)
                 if not file_data:
@@ -196,7 +196,7 @@ async def start_handler(client: Client, message: Message):
                                 message_id=int(src_msg_id),
                                 reply_markup=InlineKeyboardMarkup([])
                             )
-                        except Exception as copy_err:
+                        except Exception:
                             # Secondary Fallback Fetch Method (Guaranteed to work if file exists)
                             if fallback_file_id and fallback_file_id != "None":
                                 try:
@@ -464,6 +464,7 @@ async def unified_media_handler(client: Client, message: Message):
             src_chat_id = message.forward_from_chat.id if message.forward_from_chat else message.chat.id
             src_msg_id = message.forward_from_message_id if message.forward_from_message_id else message.id
             
+            # THE FALLBACK RESTORED HERE
             media = message.document or message.video or message.audio or message.photo
             file_id_fallback = media.file_id if media else "None"
             
@@ -525,6 +526,7 @@ async def unified_media_handler(client: Client, message: Message):
     src_chat_id = message.forward_from_chat.id if message.forward_from_chat else message.chat.id
     src_msg_id = message.forward_from_message_id if message.forward_from_message_id else message.id
     
+    # THE FALLBACK RESTORED HERE
     media = message.document or message.video or message.audio or message.photo
     file_id_fallback = media.file_id if media else "None"
     
