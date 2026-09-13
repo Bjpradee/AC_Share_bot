@@ -74,28 +74,44 @@ async def check_force_sub(client: Client, user_id: int):
                 chat_id = channel_id
                 
             try:
-                member = await client.get_chat_member(chat_id, user_id)
-                # If user left or kicked, they need to join
-                if member.status in [ChatMemberStatus.LEFT, ChatMemberStatus.KICKED, ChatMemberStatus.RESTRICTED]:
-                    is_participant = False
-                    chat = await client.get_chat(chat_id)
-                    link = chat.invite_link or f"https://t.me/{chat.username}" if chat.username else None
-                    if not link:
-                        link = await client.export_chat_invite_link(chat_id)
-                    buttons.append([InlineKeyboardButton(f"📢 Join {chat.title}", url=link)])
-            except UserNotParticipant:
-                # User has not joined yet
-                is_participant = False
                 chat = await client.get_chat(chat_id)
-                link = chat.invite_link or f"https://t.me/{chat.username}" if chat.username else None
-                if not link:
-                    link = await client.export_chat_invite_link(chat_id)
-                buttons.append([InlineKeyboardButton(f"📢 Join {chat.title}", url=link)])
                 
-        except Exception as e:
-            logging.error(f"FSub check error for {channel_id}: {e}")
-            is_participant = False
-            buttons.append([InlineKeyboardButton(f"📢 Join Channel", url="https://t.me/telegram")])
+                # Fetch Link securely
+                link = chat.invite_link
+                if not link:
+                    if chat.username:
+                        link = f"https://t.me/{chat.username}"
+                    else:
+                        try:
+                            link = await client.export_chat_invite_link(chat_id)
+                        except Exception as e:
+                            logging.error(f"Cannot export link (Need 'Invite Users' admin right) for {chat_id}: {e}")
+                            link = "https://t.me/telegram"
+                
+                title = chat.title or "Channel"
+                
+                # Check Member Status safely
+                user_joined = False
+                try:
+                    member = await client.get_chat_member(chat_id, user_id)
+                    if member.status not in [ChatMemberStatus.LEFT, ChatMemberStatus.KICKED, ChatMemberStatus.RESTRICTED]:
+                        user_joined = True
+                except UserNotParticipant:
+                    user_joined = False
+                except Exception:
+                    user_joined = False
+
+                if not user_joined:
+                    is_participant = False
+                    buttons.append([InlineKeyboardButton(f"📢 Join {title}", url=link)])
+                    
+            except Exception as e:
+                logging.error(f"FSub check error for {channel_id}: {e}")
+                is_participant = False
+                buttons.append([InlineKeyboardButton("📢 Join Channel", url="https://t.me/telegram")])
+                
+        except Exception as outer_e:
+            pass
             
     if not is_participant:
         buttons.append([InlineKeyboardButton("🔄 Try Again", callback_data="check_fs")])
@@ -236,7 +252,7 @@ async def check_fs_callback(client: Client, callback_query: CallbackQuery):
         await callback_query.message.delete()
         await callback_query.message.reply_text("✅ Thank you for joining! Now you can access your files. Click your file link again.")
     else:
-        # Dynamic update of buttons happens here! It will redraw the keyboard minus the joined channels.
+        # Dynamic update: This will refresh the buttons, HIDING the ones already joined!
         await callback_query.message.edit_reply_markup(reply_markup=fs_check)
         await callback_query.answer("❌ You haven't joined all required channels yet!", show_alert=True)
 
@@ -314,7 +330,6 @@ async def add_fsub_handler(client: Client, message: Message):
         target = f"@{target}"
         
     try:
-        # Validate that the bot can actually fetch this channel (must be admin or public)
         chat = await client.get_chat(target)
         target_id = str(chat.id)
     except Exception as e:
@@ -355,7 +370,6 @@ async def rem_fsub_handler(client: Client, message: Message):
         await db.set_fsub_channels(channels)
         await message.reply_text(f"✅ Removed `{matched}` from Force Sub list!")
     else:
-        # Fallback resolve attempt
         try:
             if not target.startswith("-") and not target.startswith("@"):
                 target = f"@{target}"
@@ -493,7 +507,6 @@ async def unified_media_handler(client: Client, message: Message):
             
         return
 
-    # Direct single file generation without commands
     src_chat_id = message.chat.id
     src_msg_id = message.id
     
