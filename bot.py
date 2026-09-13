@@ -56,7 +56,7 @@ async def schedule_message_deletion(client: Client, chat_id: int, message_ids: l
         except Exception:
             pass
 
-# 100% Crash-Proof Force Sub Checker (with dynamic button hiding)
+# 100% Crash-Proof & Flawless Force Sub Checker
 async def check_force_sub(client: Client, user_id: int):
     channels = await db.get_fsub_channels()
     if not channels:
@@ -67,51 +67,39 @@ async def check_force_sub(client: Client, user_id: int):
     
     for channel_id in channels:
         try:
-            # Convert string ID to int if it's a numeric ID (-100...)
-            try:
-                chat_id = int(channel_id)
-            except ValueError:
-                chat_id = channel_id
+            channel_id = channel_id.strip()
+            chat_id = int(channel_id) if channel_id.lstrip('-').isdigit() else channel_id
                 
+            # Safely fetch channel info
             try:
                 chat = await client.get_chat(chat_id)
-                
-                # Fetch Link securely
-                link = chat.invite_link
+                link = chat.invite_link or (f"https://t.me/{chat.username}" if chat.username else None)
                 if not link:
-                    if chat.username:
-                        link = f"https://t.me/{chat.username}"
-                    else:
-                        try:
-                            link = await client.export_chat_invite_link(chat_id)
-                        except Exception as e:
-                            logging.error(f"Cannot export link (Need 'Invite Users' admin right) for {chat_id}: {e}")
-                            link = "https://t.me/telegram"
-                
+                    link = await client.export_chat_invite_link(chat_id)
                 title = chat.title or "Channel"
-                
-                # Check Member Status safely
-                user_joined = False
-                try:
-                    member = await client.get_chat_member(chat_id, user_id)
-                    if member.status not in [ChatMemberStatus.LEFT, ChatMemberStatus.KICKED, ChatMemberStatus.RESTRICTED]:
-                        user_joined = True
-                except UserNotParticipant:
-                    user_joined = False
-                except Exception:
-                    user_joined = False
-
-                if not user_joined:
-                    is_participant = False
-                    buttons.append([InlineKeyboardButton(f"📢 Join {title}", url=link)])
-                    
             except Exception as e:
-                logging.error(f"FSub check error for {channel_id}: {e}")
-                is_participant = False
-                buttons.append([InlineKeyboardButton("📢 Join Channel", url="https://t.me/telegram")])
+                logging.error(f"Cannot access channel {chat_id}: {e}")
+                link = "https://t.me/telegram"
+                title = "Unknown Channel"
                 
-        except Exception as outer_e:
-            pass
+            # SAFE Membership Check (Strict ENUM matching for accuracy)
+            user_joined = False
+            try:
+                member = await client.get_chat_member(chat_id, user_id)
+                if member.status in [ChatMemberStatus.OWNER, ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.MEMBER]:
+                    user_joined = True
+            except UserNotParticipant:
+                user_joined = False
+            except Exception as e:
+                logging.error(f"FSub member check error for {channel_id}: {e}")
+                user_joined = False
+                
+            if not user_joined:
+                is_participant = False
+                buttons.append([InlineKeyboardButton(f"📢 Join {title}", url=link)])
+                
+        except Exception as e:
+            logging.error(f"FSub loop error: {e}")
             
     if not is_participant:
         buttons.append([InlineKeyboardButton("🔄 Try Again", callback_data="check_fs")])
@@ -125,20 +113,21 @@ async def start_handler(client: Client, message: Message):
     await db.add_user(user_id)
     
     if len(message.command) > 1:
-        # Check Force Sub for EVERYONE safely
-        try:
-            fs_check = await check_force_sub(client, user_id)
-            if fs_check is not True:
-                await message.reply_text(
-                    "🔒 **Access Denied!**\n\n"
-                    "You must join our channels below to use this bot and access files. After joining, click **'🔄 Try Again'**.",
-                    reply_markup=fs_check
-                )
+        # OWNER BYPASS: Owner shouldn't be asked to join channels!
+        if user_id != OWNER_ID:
+            try:
+                fs_check = await check_force_sub(client, user_id)
+                if fs_check is not True:
+                    await message.reply_text(
+                        "🔒 **Access Denied!**\n\n"
+                        "You must join our channels below to use this bot and access files. After joining, click **'🔄 Try Again'**.",
+                        reply_markup=fs_check
+                    )
+                    return
+            except Exception as e:
+                logging.error(f"FSub check failed: {e}")
+                await message.reply_text("❌ Connection error during channel verification. Please try again.")
                 return
-        except Exception as e:
-            logging.error(f"FSub check failed: {e}")
-            await message.reply_text("❌ Connection error during channel verification. Please try again.")
-            return
 
         encoded_payload = message.command[1]
         sent_messages = []
@@ -252,7 +241,6 @@ async def check_fs_callback(client: Client, callback_query: CallbackQuery):
         await callback_query.message.delete()
         await callback_query.message.reply_text("✅ Thank you for joining! Now you can access your files. Click your file link again.")
     else:
-        # Dynamic update: This will refresh the buttons, HIDING the ones already joined!
         await callback_query.message.edit_reply_markup(reply_markup=fs_check)
         await callback_query.answer("❌ You haven't joined all required channels yet!", show_alert=True)
 
