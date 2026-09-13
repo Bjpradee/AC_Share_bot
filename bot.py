@@ -57,7 +57,7 @@ async def schedule_message_deletion(client: Client, chat_id: int, message_ids: l
         except Exception:
             pass
 
-# 100% Crash-Proof Force Sub Checker
+# 100% Crash-Proof Force Sub Checker (OPTIMIZED FOR LIGHTNING SPEED)
 async def check_force_sub(client: Client, user_id: int):
     channels = await db.get_fsub_channels()
     if not channels:
@@ -70,17 +70,8 @@ async def check_force_sub(client: Client, user_id: int):
         try:
             channel_id = channel_id.strip()
             chat_id = int(channel_id) if channel_id.lstrip('-').isdigit() else channel_id
-                
-            try:
-                chat = await client.get_chat(chat_id)
-                link = chat.invite_link or (f"https://t.me/{chat.username}" if chat.username else None)
-                if not link:
-                    link = await client.export_chat_invite_link(chat_id)
-                title = chat.title or "Channel"
-            except Exception:
-                link = "https://t.me/telegram"
-                title = "Unknown Channel"
-                
+            
+            # SPEED OPTIMIZATION: Check member status FIRST before fetching channel links!
             user_joined = False
             try:
                 member = await client.get_chat_member(chat_id, user_id)
@@ -93,6 +84,17 @@ async def check_force_sub(client: Client, user_id: int):
                 
             if not user_joined:
                 is_participant = False
+                # Fetch channel info ONLY if user hasn't joined (saves massive loading time)
+                try:
+                    chat = await client.get_chat(chat_id)
+                    link = chat.invite_link or (f"https://t.me/{chat.username}" if chat.username else None)
+                    if not link:
+                        link = await client.export_chat_invite_link(chat_id)
+                    title = chat.title or "Channel"
+                except Exception:
+                    link = "https://t.me/telegram"
+                    title = "Unknown Channel"
+                    
                 buttons.append([InlineKeyboardButton(f"📢 Join {title}", url=link)])
                 
         except Exception:
@@ -112,8 +114,8 @@ async def start_handler(client: Client, message: Message):
     if len(message.command) > 1:
         encoded_payload = message.command[1]
         
-        # OWNER BYPASS - Owner-kku FSub block aagathu
-        if user_id != OWNER_ID:
+        # OWNER BYPASS & DOUBLE-CHECK PREVENTION
+        if user_id != OWNER_ID and not getattr(message, "fsub_verified", False):
             try:
                 fs_check = await check_force_sub(client, user_id)
                 if fs_check is not True:
@@ -168,7 +170,8 @@ async def start_handler(client: Client, message: Message):
                             sent_messages.append(sent_msg.id)
                     except Exception as e:
                         logging.error(f"Batch skip msg {msg_id}: {e}")
-                    await asyncio.sleep(0.5)
+                    # BATCH SPEED OPTIMIZATION (0.5 to 0.3 for smoother delivery)
+                    await asyncio.sleep(0.3)
                 
                 if files_sent_count == 0:
                     err_msg = await message.reply_text("❌ Failed to fetch batch files!\n\n**Note:** Make sure the bot is an **Admin** in the original channel where these files were forwarded from.")
@@ -276,10 +279,11 @@ async def check_fs_callback(client: Client, callback_query: CallbackQuery):
             del USER_PAYLOADS[user_id] # clear memory
             await client.send_message(user_id, "✅ **Verified! Sending your files...**")
             
-            # Automatically process the file request!
+            # Automatically process the file request FASTER!
             dummy_msg = callback_query.message
             dummy_msg.from_user = callback_query.from_user
             dummy_msg.command = ["start", payload]
+            dummy_msg.fsub_verified = True  # SPEEDUP FLAG: Skips checking again!
             await start_handler(client, dummy_msg)
         else:
             await client.send_message(
