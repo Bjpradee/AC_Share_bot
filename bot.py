@@ -163,9 +163,10 @@ async def start_handler(client: Client, message: Message):
                     ])
                     
                     await message.reply_text(
-                        f"🎉 **Your Exclusive Channel Invitation is Ready!**\n\n"
-                        f"⚠️ **URGENT:** This is a one-time use link and will automatically expire in **{mins} minutes**.\n"
-                        f"Please join immediately to secure your access!",
+                        f"🎉 **Your Exclusive Channel Invite Link is Ready!**\n\n"
+                        f"⚠️ **Warning:** This is a one-time use link and will automatically expire in **{mins} minutes**.\n"
+                        f"Please join immediately to secure your access!"
+                        f"👑 **Owned by @Anime_Control_Tamil**",
                         reply_markup=keyboard,
                         disable_web_page_preview=True
                     )
@@ -298,14 +299,14 @@ async def start_handler(client: Client, message: Message):
                 "🔹 `/setchannel` - Temp invite link\n"
                 "🔹 `/addfsub` | `/remfsub` | `/fsublist` | `/clearfsub`\n"
                 "🔹 `/stats` | `/settings` | `/broadcast`\n\n"
-                "👑 **Owned by @Anime_Control**",
+                "👑 **Owned by @Anime_Control_Tamil**",
                 disable_web_page_preview=True
             )
         else:
             await message.reply_text(
                 "✨ **Welcome to Our Premium File Store!** ✨\n\n"
                 "Send or click the provided file links to access exclusive content instantly.\n\n"
-                "👑 **Owned by @Anime_Control**",
+                "👑 **Owned by @Anime_Control_Tamil**",
                 disable_web_page_preview=True
             )
 
