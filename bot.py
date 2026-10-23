@@ -156,9 +156,17 @@ async def start_handler(client: Client, message: Message):
                     )
                     
                     mins = expire_sec // 60
+                    
+                    # Stylized Button with English Warning Message
+                    keyboard = InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔗 JOIN CHANNEL NOW", url=invite.invite_link)]
+                    ])
+                    
                     await message.reply_text(
-                        f"🎉 **Unakkana Exclusive Channel Invite Link:**\n{invite.invite_link}\n\n"
-                        f"⚠️ *Seekiram join panniko! Intha link innum {mins} nimishathula invalid aagidum (1 user only).*",
+                        f"🎉 **Your Exclusive Channel Invitation is Ready!**\n\n"
+                        f"⚠️ **URGENT:** This is a one-time use link and will automatically expire in **{mins} minutes**.\n"
+                        f"Please join immediately to secure your access!",
+                        reply_markup=keyboard,
                         disable_web_page_preview=True
                     )
                 except Exception as e:
@@ -280,14 +288,25 @@ async def start_handler(client: Client, message: Message):
             logging.error(f"Error in start link handler: {e}")
             await message.reply_text("❌ Invalid link or expired batch!")
     else:
+        # Custom Stylish Start Messages
         if user_id == OWNER_ID:
             await message.reply_text(
-                "👋 Vanakkam da mapla!\n"
-                "Use `/genlink`, `/batch`, `/setchannel`, `/addfsub`, `/remfsub`, `/fsublist`, or `/stats`."
+                "👋 **Welcome Back, Master!**\n\n"
+                "I am ready to manage your files. Here are your commands:\n"
+                "🔹 `/genlink` - Single file link\n"
+                "🔹 `/batch` - Batch files link\n"
+                "🔹 `/setchannel` - Temp invite link\n"
+                "🔹 `/addfsub` | `/remfsub` | `/fsublist` | `/clearfsub`\n"
+                "🔹 `/stats` | `/settings` | `/broadcast`\n\n"
+                "👑 **Owned by @Anime_Control**",
+                disable_web_page_preview=True
             )
         else:
             await message.reply_text(
-                "👋 Welcome! Send or click file links provided by our channel to access content."
+                "✨ **Welcome to Our Premium File Store!** ✨\n\n"
+                "Send or click the provided file links to access exclusive content instantly.\n\n"
+                "👑 **Owned by @Anime_Control**",
+                disable_web_page_preview=True
             )
 
 # --- NEW COMMAND: SETCHANNEL FOR TEMPORARY INVITE LINKS ---
