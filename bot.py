@@ -164,8 +164,8 @@ async def start_handler(client: Client, message: Message):
                     
                     await message.reply_text(
                         f"🎉 **Your Exclusive Channel Invite Link is Ready!**\n\n"
-                        f"⚠️ **Warning:** This is a one-time use link and will automatically expire in **{mins} minutes**.\n"
-                        f"Please join immediately to secure your access!"
+                        f"⚠️ **Warning:** This is a one-time use link and will automatically expire in **{mins} minute**.\n"
+                        f"Please join immediately to secure your access!\n\n"
                         f"👑 **Owned by @Anime_Control_Tamil**",
                         reply_markup=keyboard,
                         disable_web_page_preview=True
