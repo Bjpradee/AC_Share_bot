@@ -304,7 +304,7 @@ async def start_handler(client: Client, message: Message):
             )
         else:
             await message.reply_text(
-                "✨ **Welcome to Our Premium File Store!** ✨\n\n"
+                "✨ **Welcome to Our Anitroll Link Share Bot!** ✨\n\n"
                 "Send or click the provided file links to access exclusive content instantly.\n\n"
                 "👑 **Owned by @Anime_Control_Tamil**",
                 disable_web_page_preview=True
