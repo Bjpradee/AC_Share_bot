@@ -10,7 +10,7 @@ import base64
 import time
 import uuid
 from pyrogram import Client, filters, idle
-from pyrogram.enums import ChatMemberStatus
+from pyrogram.enums import ChatMemberStatus, ParseMode
 from pyrogram.types import Message, BotCommand, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from pyrogram.errors import UserNotParticipant
 from config import API_ID, API_HASH, BOT_TOKEN, OWNER_ID
@@ -149,7 +149,7 @@ async def start_handler(client: Client, message: Message):
                     expire_timestamp = int(time.time()) + expire_sec
                     # Telegram API: 1 user limit + specific time expiration
                     invite = await client.create_chat_invite_link(
-                        chat_id=channel_id,
+                        chat_id=int(channel_id),
                         expire_date=expire_timestamp,
                         member_limit=1
                     )
@@ -302,7 +302,7 @@ async def set_channel_link_handler(client: Client, message: Message):
                 "❌ **Format Thappu Maapla!**\n"
                 "Ipdi kudu: `/setchannel <Channel_ID> <Minutes>`\n"
                 "Ex: `/setchannel -100192837465 5`",
-                parse_mode="Markdown"
+                parse_mode=ParseMode.MARKDOWN
             )
             return
 
@@ -326,7 +326,7 @@ async def set_channel_link_handler(client: Client, message: Message):
             f"✅ **Temporary Channel Invite Master Link Ready!**\n\n"
             f"🔗 **Users-ku Kudukka Vendiya Link:**\n`{master_link}`\n\n"
             f"⏳ **Time Limit:** User click panna {expire_minutes} nimishathula intha invite link invalid aagidum (1 User limit).",
-            parse_mode="Markdown"
+            parse_mode=ParseMode.MARKDOWN
         )
     except Exception as e:
         await message.reply_text(f"⚠️ Error: {str(e)}")
