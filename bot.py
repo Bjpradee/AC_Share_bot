@@ -9,6 +9,7 @@ import logging
 import base64
 import time
 import uuid
+from datetime import datetime, timedelta
 from pyrogram import Client, filters, idle
 from pyrogram.enums import ChatMemberStatus, ParseMode
 from pyrogram.types import Message, BotCommand, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
@@ -146,11 +147,11 @@ async def start_handler(client: Client, message: Message):
                 expire_sec = ch_data["expire_seconds"]
                 
                 try:
-                    expire_timestamp = int(time.time()) + expire_sec
+                    expire_date_obj = datetime.now() + timedelta(seconds=expire_sec)
                     # Telegram API: 1 user limit + specific time expiration
                     invite = await client.create_chat_invite_link(
                         chat_id=int(channel_id),
-                        expire_date=expire_timestamp,
+                        expire_date=expire_date_obj,
                         member_limit=1
                     )
                     
